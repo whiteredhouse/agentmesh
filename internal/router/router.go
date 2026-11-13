@@ -247,10 +247,16 @@ func (r *Router) admitPeer(p peer.ID, expiry time.Time) {
 	}
 }
 
-// memberCredential is a verified credential and the key that verified it.
+// memberCredential keeps owned, immutable admission bytes and the key that
+// verified them. A parsed Biscuit is request-local: constructing an authorizer
+// can mutate its backing buffers, even when the authorization only reads facts.
 type memberCredential struct {
-	biscuit *biscuit.Biscuit
-	key     ed25519.PublicKey
+	serialized []byte
+	key        ed25519.PublicKey
+}
+
+func newMemberCredential(serialized []byte, key ed25519.PublicKey) memberCredential {
+	return memberCredential{serialized: slices.Clone(serialized), key: slices.Clone(key)}
 }
 
 // forgetPeer is the reverse of admitPeer, and drops the circuit addresses
@@ -342,8 +348,8 @@ type Router struct {
 	PubSub             *pubsub.PubSub
 	EventTopic         *pubsub.Topic
 	authenticatedPeers sync.Map
-	// credentials is the credential each admitted member presented, as
-	// memberCredential, for what the directory checks against it.
+	// credentials holds immutable memberCredential snapshots. Each directory
+	// authorization decodes its own Biscuit from the admitted serialized bytes.
 	credentials sync.Map
 	// policy is the mesh policy as the control plane renders it
 	// (PolicyConfigGetResponse.datalog_rules), what a member's credential is
@@ -1177,7 +1183,7 @@ func (r *Router) syncRevocations() error {
 	r.credentials.Range(func(k, v any) bool {
 		pid, ok := k.(peer.ID)
 		cred, credOK := v.(memberCredential)
-		if ok && credOK && r.isBiscuitRevoked(cred.biscuit) {
+		if ok && credOK && r.isSerializedBiscuitRevoked(cred.serialized) {
 			logger.Infof("[Revocations] Evicting peer %s with revoked biscuit", pid)
 			r.forgetPeer(pid)
 			if r.records != nil {
@@ -1910,7 +1916,7 @@ func (r *Router) HandleAuthHandshake(s network.Stream) {
 	}
 
 	r.admitPeer(remotePeer, expiry)
-	r.credentials.Store(remotePeer, memberCredential{biscuit: b, key: verifyingKey})
+	r.credentials.Store(remotePeer, newMemberCredential(exchange.Biscuit, verifyingKey))
 	authHandshakesTotal.WithLabelValues(handshakeOK).Inc()
 	logger.Infof("[AuthN] Successfully authenticated peer %s", remotePeer)
 	// A router that proves the router role is a peer router from here on,
@@ -2239,4 +2245,12 @@ func samePublicKeys(a, b []ed25519.PublicKey) bool {
 		}
 	}
 	return true
+}
+
+// isSerializedBiscuitRevoked decodes a request-local Biscuit from a cached
+// memberCredential's bytes and checks it against the revocation set. A
+// credential that no longer decodes counts as revoked.
+func (r *Router) isSerializedBiscuitRevoked(serialized []byte) bool {
+	b, _, err := identity.UnmarshalInbound(serialized)
+	return err != nil || r.isBiscuitRevoked(b)
 }

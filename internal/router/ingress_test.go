@@ -147,11 +147,7 @@ func attachWithRole(t *testing.T, r *Router, pub ed25519.PublicKey, priv ed25519
 	if err != nil {
 		t.Fatalf("MintBiscuitToken: %v", err)
 	}
-	b, err := biscuit.Unmarshal(tok)
-	if err != nil {
-		t.Fatalf("biscuit.Unmarshal: %v", err)
-	}
-	r.credentials.Store(m.ID(), memberCredential{biscuit: b, key: pub})
+	r.credentials.Store(m.ID(), newMemberCredential(tok, pub))
 	return m
 }
 

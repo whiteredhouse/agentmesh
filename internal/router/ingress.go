@@ -579,7 +579,16 @@ func (r *Router) handleIngressRequest(w http.ResponseWriter, req *http.Request, 
 		return
 	}
 
-	targetFacts, err := identity.TargetFactsFromBiscuit(cred.biscuit, r.getTrustedPublicKeys(), r.config.BiscuitTimeout)
+	// Decode a request-local Biscuit from the admitted bytes; a parsed Biscuit
+	// is never shared between authorizations (see memberCredential).
+	credBiscuit, _, err := identity.UnmarshalInbound(cred.serialized)
+	if err != nil {
+		logger.Warnf("[Ingress] Failed to decode credential for %s: %v", targetPeer, err)
+		routerIngressRequestsTotal.WithLabelValues(modeStr, ingressOutcomeBadGateway).Inc()
+		http.Error(w, "Bad Gateway", http.StatusBadGateway)
+		return
+	}
+	targetFacts, err := identity.TargetFactsFromBiscuit(credBiscuit, r.getTrustedPublicKeys(), r.config.BiscuitTimeout)
 	if err != nil {
 		routerIngressRequestsTotal.WithLabelValues(modeStr, ingressOutcomeBadGateway).Inc()
 		logger.Warnf("[Ingress] Failed to extract target facts for %s: %v", targetPeer, err)
@@ -896,7 +905,7 @@ func (r *Router) authenticateIngressMember(ctx context.Context, targetPeer peer.
 	if r.isBiscuitRevoked(b) {
 		return memberCredential{}, fmt.Errorf("provider %s biscuit is revoked", targetPeer)
 	}
-	cred := memberCredential{biscuit: b, key: verifyingKey}
+	cred := newMemberCredential(resp.Biscuit, verifyingKey)
 	r.admitPeer(targetPeer, expiry)
 	r.credentials.Store(targetPeer, cred)
 	return cred, nil
