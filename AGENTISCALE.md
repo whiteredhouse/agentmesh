@@ -20,8 +20,9 @@ agentiscaled keeps Google's module path and pins this branch with
 
 ## Updating to a new upstream release
 
-1. Sync `main` with upstream, then rebase `agentiscale` onto the new release tag
-   in a pull request.
+1. Sync `main` with upstream, then merge the new release tag into `agentiscale`
+   in a pull request. Merge rather than rebase, so that commits agentiscaled
+   pinned earlier stay on the branch.
 2. Run `go build ./... && go vet ./export/...` and
    `go test -race ./internal/router ./internal/identity ./internal/controlplane ./internal/node`.
    If an aliased name was renamed or removed upstream, fix `export/node/node.go`.
