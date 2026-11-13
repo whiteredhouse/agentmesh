@@ -2310,6 +2310,14 @@ func (s *Server) HandleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// agentiscale fork: a token bound to one peer admits only that peer, on
+	// this first enrollment and on every re-enrollment below.
+	if bound, err := tokenBoundPeer(tokenRecord.Description); err != nil || (bound != "" && bound != canonical) {
+		logger.Warnw("Bootstrap token bound to another peer", "peer_id", canonical, "token_id", tokenRecord.ID)
+		s.writeEnrollError(w, api.EnrollmentStatus_ENROLLMENT_STATUS_REJECTED, "Bootstrap token is bound to another peer")
+		return
+	}
+
 	// Bootstrap enrollments carry no OIDC identity, but the device-key ban
 	// still applies, and before the existing-request lookup: a banned node
 	// must not replay its old approved enrollment either.
@@ -2802,6 +2810,11 @@ func (s *Server) HandleAdminBootstrapTokens(w http.ResponseWriter, r *http.Reque
 	}
 	if req.GetMaxUsages() <= 0 {
 		req.MaxUsages = 1
+	}
+	// agentiscale fork: refuse a binding no peer could satisfy.
+	if _, err := tokenBoundPeer(req.GetDescription()); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	randBytes := make([]byte, 16)
