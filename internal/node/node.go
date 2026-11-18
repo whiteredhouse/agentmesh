@@ -1982,8 +1982,14 @@ func (n *AgentMeshNode) handleKeyRotationEvent(event *api.MeshEvent) {
 // pruneTrustedKeys drops keys older than gracePeriod but always keeps the
 // most recently received one: the current signing key has no successor until
 // a rotation event arrives, so ageing it out would empty the trust set and
-// leave the node unable to verify any peer or router.
-func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duration) []TrustedKey {
+// leave the node unable to verify any peer or router. It also keeps every key
+// keep reports, which is the key that signed the node's own identity: a key
+// is received when the node first learns it, not when the control plane
+// stops signing with it, so the newest received key need not be the one a
+// refresh signed with, and dropping that one leaves a valid identity that
+// fails the check at the next start, when only the control plane can renew
+// it.
+func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duration, keep func(ed25519.PublicKey) bool) []TrustedKey {
 	if len(keys) == 0 {
 		return keys
 	}
@@ -1995,11 +2001,25 @@ func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duratio
 	}
 	var active []TrustedKey
 	for i, tk := range keys {
-		if i == newest || now.Sub(tk.ReceivedAt) <= gracePeriod {
+		if i == newest || now.Sub(tk.ReceivedAt) <= gracePeriod || (keep != nil && keep(tk.Key)) {
 			active = append(active, tk)
 		}
 	}
 	return active
+}
+
+// signedOwnIdentity reports whether key signed the node's current identity.
+func (n *AgentMeshNode) signedOwnIdentity(key ed25519.PublicKey) bool {
+	token := n.GetIdentity()
+	if len(token) == 0 {
+		return false
+	}
+	b, err := biscuit.Unmarshal(token)
+	if err != nil {
+		return false
+	}
+	_, err = b.Authorizer(key)
+	return err == nil
 }
 
 func (n *AgentMeshNode) startKeyPruning(ctx context.Context, gracePeriod time.Duration) {
@@ -2014,7 +2034,7 @@ func (n *AgentMeshNode) startKeyPruning(ctx context.Context, gracePeriod time.Du
 			case <-ticker.C:
 				logger.Info("[KeyPruning] Pruning expired keys...")
 				n.keysMu.Lock()
-				pruned := pruneTrustedKeys(n.trustedKeys, time.Now(), gracePeriod)
+				pruned := pruneTrustedKeys(n.trustedKeys, time.Now(), gracePeriod, n.signedOwnIdentity)
 				changed := len(pruned) != len(n.trustedKeys)
 				n.trustedKeys = pruned
 				snapshot := append([]TrustedKey(nil), pruned...)

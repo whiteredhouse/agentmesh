@@ -353,7 +353,7 @@ func TestPruneTrustedKeys(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := pruneTrustedKeys(tt.in, now, grace)
+			got := pruneTrustedKeys(tt.in, now, grace, nil)
 			if len(got) != len(tt.want) {
 				t.Fatalf("got %d keys, want %d", len(got), len(tt.want))
 			}
@@ -363,6 +363,54 @@ func TestPruneTrustedKeys(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestKeyPruningKeepsTheIdentitySigner covers a node whose identity was
+// signed by a key it learned before the newest one it holds, as when the
+// control plane's newest key reached it earlier or its stored key was added
+// again at a restart: pruning must not drop the signer, or the next start
+// finds a valid identity that no trusted key verifies.
+func TestKeyPruningKeepsTheIdentitySigner(t *testing.T) {
+	now := time.Now()
+	signerPub, signerPriv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stalePub, _, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := peer.IDFromPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := identity.MintBootstrapBiscuitToken(signerPriv, pid, api.RoleNode, now.Add(24*time.Hour), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &AgentMeshNode{}
+	n.SetIdentityCache(token)
+
+	keys := []TrustedKey{
+		{Key: signerPub, ReceivedAt: now.Add(-72 * time.Hour)},
+		{Key: stalePub, ReceivedAt: now.Add(-48 * time.Hour)},
+		{Key: otherPub, ReceivedAt: now.Add(-time.Minute)},
+	}
+	got := pruneTrustedKeys(keys, now, 24*time.Hour, n.signedOwnIdentity)
+	if len(got) != 2 || !got[0].Key.Equal(signerPub) || !got[1].Key.Equal(otherPub) {
+		t.Fatalf("got %d keys, want the identity's signer and the newest key", len(got))
+	}
+	if !n.signedOwnIdentity(signerPub) || n.signedOwnIdentity(otherPub) {
+		t.Fatal("signedOwnIdentity does not tell the signer from another key")
 	}
 }
 
