@@ -118,9 +118,38 @@ var (
 
 var ErrFatalAuth = errors.New("fatal authentication error")
 
+// TrustedKey is a control plane public key the node trusts. ReceivedAt is
+// the last time the control plane vouched for the key, by listing it in /keys
+// or announcing it in a rotation event; key pruning ages keys from it.
 type TrustedKey struct {
 	Key        ed25519.PublicKey
 	ReceivedAt time.Time
+}
+
+// StaleIdentityError is Start's error when the stored identity fails the
+// role check against every trusted key and neither recovery renewed it. It
+// unwraps to the role check's error and to both recovery errors, so a caller
+// can tell a control plane that refused the identity (a *RefreshError with
+// its status) from one that never answered.
+type StaleIdentityError struct {
+	Role        string
+	RoleErr     error
+	RefreshErr  error
+	RecoveryErr error
+}
+
+func (e *StaleIdentityError) Error() string {
+	return fmt.Sprintf("loaded identity fails role requirement %q (autonomous refresh: %v; refresh-token recovery: %v): %v", e.Role, e.RefreshErr, e.RecoveryErr, e.RoleErr)
+}
+
+func (e *StaleIdentityError) Unwrap() []error {
+	var errs []error
+	for _, err := range []error{e.RoleErr, e.RefreshErr, e.RecoveryErr} {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errs
 }
 
 type nodeRelayACL struct {
@@ -483,7 +512,15 @@ func NewAgentMeshNode(cfg Options) (*AgentMeshNode, error) {
 		}
 	}
 	if len(cfg.ControlPlanePubKey) > 0 && !containsTrustedKey(trustedKeys, cfg.ControlPlanePubKey) {
-		trustedKeys = append(trustedKeys, TrustedKey{Key: cfg.ControlPlanePubKey, ReceivedAt: time.Now()})
+		// The configured key is only as fresh as the enrollment or /info
+		// answer that stored it. Next to persisted keys it must not count as
+		// just vouched for, or it would outrank the control plane's newer
+		// keys when pruning picks the newest; alone, it is all there is.
+		var vouched time.Time
+		if len(trustedKeys) == 0 {
+			vouched = time.Now()
+		}
+		trustedKeys = append(trustedKeys, TrustedKey{Key: cfg.ControlPlanePubKey, ReceivedAt: vouched})
 	}
 
 	node := &AgentMeshNode{
@@ -579,7 +616,7 @@ func (n *AgentMeshNode) Start(ctx context.Context) error {
 				} else {
 					logger.Warnf("Autonomous refresh refused (%v); attempting recovery via stored refresh token", refreshErr)
 					if recErr := n.ReEnrollWithRefreshToken(ctx); recErr != nil {
-						return fmt.Errorf("loaded identity fails role requirement %q (autonomous refresh: %v; refresh-token recovery: %v): %w", n.config.RequiredRole, refreshErr, recErr, roleErr)
+						return &StaleIdentityError{Role: n.config.RequiredRole, RoleErr: roleErr, RefreshErr: refreshErr, RecoveryErr: recErr}
 					}
 					logger.Info("Identity recovered via refresh-token re-enrollment.")
 				}
@@ -1979,16 +2016,17 @@ func (n *AgentMeshNode) handleKeyRotationEvent(event *api.MeshEvent) {
 	n.triggerControlPlaneSync()
 }
 
-// pruneTrustedKeys drops keys older than gracePeriod but always keeps the
-// most recently received one: the current signing key has no successor until
-// a rotation event arrives, so ageing it out would empty the trust set and
-// leave the node unable to verify any peer or router. It also keeps every key
-// keep reports, which is the key that signed the node's own identity: a key
-// is received when the node first learns it, not when the control plane
-// stops signing with it, so the newest received key need not be the one a
-// refresh signed with, and dropping that one leaves a valid identity that
-// fails the check at the next start, when only the control plane can renew
-// it.
+// pruneTrustedKeys drops keys the control plane has not vouched for within
+// gracePeriod, as when it stopped listing them or the node could not reach
+// it, but always keeps the most recently vouched-for one: the current
+// signing key has no successor until a rotation event arrives, so ageing it
+// out would empty the trust set and leave the node unable to verify any peer
+// or router. It also keeps every key keep reports, which is the key that
+// signed the node's own identity: the control plane lists all its valid keys
+// alike, so the newest vouched-for key need not be the one a refresh signed
+// with, and dropping that one after a long time offline leaves a valid
+// identity that fails the check at the next start, when only the control
+// plane can renew it.
 func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duration, keep func(ed25519.PublicKey) bool) []TrustedKey {
 	if len(keys) == 0 {
 		return keys

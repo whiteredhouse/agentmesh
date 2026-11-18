@@ -908,3 +908,18 @@ func TestFindProvidersSkipsRevoked(t *testing.T) {
 		t.Errorf("revoked peer returned as provider: %v", providers)
 	}
 }
+
+// TestStaleIdentityErrorUnwraps covers what a caller needs from a failed
+// start: the refresh status when the control plane answered, and no status
+// when it did not.
+func TestStaleIdentityErrorUnwraps(t *testing.T) {
+	refused := &StaleIdentityError{Role: api.RoleNode, RoleErr: errors.New("biscuit: invalid signature"), RefreshErr: &RefreshError{StatusCode: 401, Message: "refused"}, RecoveryErr: errors.New("no refresh token")}
+	var re *RefreshError
+	if !errors.As(refused, &re) || re.StatusCode != 401 {
+		t.Fatalf("errors.As found no refresh status in %v", refused)
+	}
+	offline := &StaleIdentityError{Role: api.RoleNode, RoleErr: errors.New("biscuit: invalid signature"), RefreshErr: context.DeadlineExceeded}
+	if errors.As(offline, &re) || !errors.Is(offline, context.DeadlineExceeded) {
+		t.Fatalf("offline error unwraps wrong: %v", offline)
+	}
+}
