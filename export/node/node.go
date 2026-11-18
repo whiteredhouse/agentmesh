@@ -43,6 +43,9 @@ type (
 	ControlPlaneStatusError = cpclient.StatusError
 	// RefreshError carries the status of a refused enrollment refresh.
 	RefreshError = inode.RefreshError
+	// StaleIdentityError is Start's error for a stored identity no trusted
+	// key verifies that neither recovery renewed.
+	StaleIdentityError = inode.StaleIdentityError
 )
 
 const (
