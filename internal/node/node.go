@@ -126,6 +126,12 @@ type TrustedKey struct {
 	ReceivedAt time.Time
 }
 
+// neverVouched is the ReceivedAt of a key the control plane has not vouched
+// for in this trust set's lifetime: older than any real one, and, unlike the
+// zero time, kept as it is through the store, which reads a missing time as
+// now.
+var neverVouched = time.Unix(0, 0).UTC()
+
 // StaleIdentityError is Start's error when the stored identity fails the
 // role check against every trusted key and neither recovery renewed it. It
 // unwraps to the role check's error and to both recovery errors, so a caller
@@ -516,7 +522,7 @@ func NewAgentMeshNode(cfg Options) (*AgentMeshNode, error) {
 		// answer that stored it. Next to persisted keys it must not count as
 		// just vouched for, or it would outrank the control plane's newer
 		// keys when pruning picks the newest; alone, it is all there is.
-		var vouched time.Time
+		vouched := neverVouched
 		if len(trustedKeys) == 0 {
 			vouched = time.Now()
 		}
@@ -2018,10 +2024,12 @@ func (n *AgentMeshNode) handleKeyRotationEvent(event *api.MeshEvent) {
 
 // pruneTrustedKeys drops keys the control plane has not vouched for within
 // gracePeriod, as when it stopped listing them or the node could not reach
-// it, but always keeps the most recently vouched-for one: the current
+// it, but always keeps the most recently vouched-for ones: the current
 // signing key has no successor until a rotation event arrives, so ageing it
 // out would empty the trust set and leave the node unable to verify any peer
-// or router. It also keeps every key keep reports, which is the key that
+// or router. A /keys answer vouches for all its keys at once and says
+// nothing about which is current, so every key with the latest time is kept,
+// never one of them by its place in the list. It also keeps every key keep reports, which is the key that
 // signed the node's own identity: the control plane lists all its valid keys
 // alike, so the newest vouched-for key need not be the one a refresh signed
 // with, and dropping that one after a long time offline leaves a valid
@@ -2031,15 +2039,15 @@ func pruneTrustedKeys(keys []TrustedKey, now time.Time, gracePeriod time.Duratio
 	if len(keys) == 0 {
 		return keys
 	}
-	newest := 0
-	for i, tk := range keys {
-		if tk.ReceivedAt.After(keys[newest].ReceivedAt) {
-			newest = i
+	latest := keys[0].ReceivedAt
+	for _, tk := range keys {
+		if tk.ReceivedAt.After(latest) {
+			latest = tk.ReceivedAt
 		}
 	}
 	var active []TrustedKey
-	for i, tk := range keys {
-		if i == newest || now.Sub(tk.ReceivedAt) <= gracePeriod || (keep != nil && keep(tk.Key)) {
+	for _, tk := range keys {
+		if tk.ReceivedAt.Equal(latest) || now.Sub(tk.ReceivedAt) <= gracePeriod || (keep != nil && keep(tk.Key)) {
 			active = append(active, tk)
 		}
 	}

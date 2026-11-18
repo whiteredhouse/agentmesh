@@ -923,3 +923,64 @@ func TestStaleIdentityErrorUnwraps(t *testing.T) {
 		t.Fatalf("offline error unwraps wrong: %v", offline)
 	}
 }
+
+// TestKeyPruningKeepsEveryLatestKey covers a /keys answer that vouched for
+// a retiring and a current key at once, followed by an outage longer than
+// the grace period: the answer's order says nothing about which key is
+// current, so pruning keeps both rather than whichever came first.
+func TestKeyPruningKeepsEveryLatestKey(t *testing.T) {
+	now := time.Now()
+	synced := now.Add(-48 * time.Hour)
+	retiring, _, _ := ed25519.GenerateKey(nil)
+	current, _, _ := ed25519.GenerateKey(nil)
+	dropped, _, _ := ed25519.GenerateKey(nil)
+	keys := []TrustedKey{{Key: retiring, ReceivedAt: synced}, {Key: current, ReceivedAt: synced}, {Key: dropped, ReceivedAt: synced.Add(-time.Hour)}}
+	got := pruneTrustedKeys(keys, now, 24*time.Hour, func(k ed25519.PublicKey) bool { return k.Equal(retiring) })
+	if len(got) != 2 || !got[0].Key.Equal(retiring) || !got[1].Key.Equal(current) {
+		t.Fatalf("got %d keys, want the retiring and the current key of the last sync", len(got))
+	}
+}
+
+// TestFallbackKeyStaysOldThroughTheStore covers the configured key re-added
+// next to persisted keys at a start: it must stay older than them after the
+// set is saved and loaded again, or the next start would take it for the
+// newest key and prune the real rotation key.
+func TestFallbackKeyStaysOldThroughTheStore(t *testing.T) {
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rotated, _, _ := ed25519.GenerateKey(nil)
+	configured, _, _ := ed25519.GenerateKey(nil)
+	learned := time.Now().Add(-30 * time.Hour).Truncate(time.Second)
+	if err := store.SaveTrustedKeys([]TrustedKey{{Key: rotated, ReceivedAt: learned}}); err != nil {
+		t.Fatal(err)
+	}
+	priv, _, err := crypto.GenerateEd25519Key(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := NewAgentMeshNode(Options{PrivKey: priv, Store: store, ControlPlanePubKey: configured})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A rotation event persists the set before any sync succeeds.
+	n.persistTrustedKeys(n.trustedKeys)
+	loaded, err := store.LoadTrustedKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range loaded {
+		switch {
+		case tk.Key.Equal(configured) && !tk.ReceivedAt.Equal(neverVouched):
+			t.Fatalf("configured key loaded as vouched for at %s", tk.ReceivedAt)
+		case tk.Key.Equal(rotated) && !tk.ReceivedAt.Equal(learned):
+			t.Fatalf("rotation key loaded with %s, want %s", tk.ReceivedAt, learned)
+		}
+	}
+	got := pruneTrustedKeys(loaded, time.Now(), 24*time.Hour, nil)
+	if len(got) != 1 || !got[0].Key.Equal(rotated) {
+		t.Fatalf("pruning kept %d keys, want only the rotation key", len(got))
+	}
+}
