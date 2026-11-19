@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -65,8 +64,8 @@ func noReport(t *testing.T, reports chan *api.NodeCatalogReport, during time.Dur
 	}
 }
 
-// A service's status rides in the catalog report only, on a copy: the
-// registry, which discovery answers from, never carries it.
+// A service's status rides in the catalog report only, next to the
+// services; ServiceInfo, which discovery answers from, has none.
 func TestServiceStatusInCatalogReport(t *testing.T) {
 	url, reports := catalogReports(t)
 	node := newCatalogTestNode(t, url)
@@ -83,14 +82,11 @@ func TestServiceStatusInCatalogReport(t *testing.T) {
 	if err := node.reportNodeCatalog(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	got := nextReport(t, reports, time.Second).Services
-	if len(got) != 1 || got[0].GetStatus().GetState() != api.ServiceState_SERVICE_STATE_BUSY || got[0].GetStatus().GetInputRequired() != 2 || !proto.Equal(got[0].GetStatus().GetSince(), since) {
-		t.Fatalf("reported services: %v", got)
-	}
-	for _, svc := range node.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED) {
-		if svc.Status != nil {
-			t.Fatalf("the registry's record carries a status: %v", svc)
-		}
+	report := nextReport(t, reports, time.Second)
+	got := report.GetServiceStatuses()
+	if len(report.GetServices()) != 1 || len(got) != 1 || got[0].GetType() != api.ServiceType_SERVICE_TYPE_MCP || got[0].GetName() != "calc" ||
+		got[0].GetStatus().GetState() != api.ServiceState_SERVICE_STATE_BUSY || got[0].GetStatus().GetInputRequired() != 2 || !proto.Equal(got[0].GetStatus().GetSince(), since) {
+		t.Fatalf("reported: %v", report)
 	}
 
 	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", nil); err != nil {
@@ -99,7 +95,7 @@ func TestServiceStatusInCatalogReport(t *testing.T) {
 	if err := node.reportNodeCatalog(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := nextReport(t, reports, time.Second).Services; len(got) != 1 || got[0].Status != nil {
+	if got := nextReport(t, reports, time.Second); len(got.GetServices()) != 1 || len(got.GetServiceStatuses()) != 0 {
 		t.Fatalf("after forgetting the status: %v", got)
 	}
 }
@@ -120,7 +116,7 @@ func TestServiceStatusChangeReportsEarly(t *testing.T) {
 	node.startCatalogReportLoop(ctx, 10*time.Millisecond, 3*time.Second, gap)
 	first := nextReport(t, reports, 5*time.Second)
 	reported := time.Now()
-	if first.Services[0].Status != nil {
+	if len(first.GetServiceStatuses()) != 0 {
 		t.Fatalf("first report: %v", first)
 	}
 
@@ -129,7 +125,7 @@ func TestServiceStatusChangeReportsEarly(t *testing.T) {
 		t.Fatal(err)
 	}
 	early := nextReport(t, reports, 5*time.Second)
-	if early.Services[0].GetStatus().GetState() != api.ServiceState_SERVICE_STATE_BUSY {
+	if stateOf(early) != api.ServiceState_SERVICE_STATE_BUSY {
 		t.Fatalf("early report: %v", early)
 	}
 	if waited := time.Since(reported); waited < gap {
@@ -146,7 +142,7 @@ func TestServiceStatusChangeReportsEarly(t *testing.T) {
 	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", busy); err != nil {
 		t.Fatal(err)
 	}
-	if got := nextReport(t, reports, 5*time.Second); got.Services[0].GetStatus().GetInputRequired() != 1 {
+	if got := nextReport(t, reports, 5*time.Second); len(got.GetServiceStatuses()) != 1 || got.GetServiceStatuses()[0].GetStatus().GetInputRequired() != 1 {
 		t.Fatalf("report after a task began waiting for input: %v", got)
 	}
 }
@@ -159,37 +155,17 @@ func TestSetServiceStatusRefusesInvalidTimes(t *testing.T) {
 	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", bad); err == nil {
 		t.Fatal("accepted a time past year 9999")
 	}
-	if got := node.withServiceStatus(node.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)); got[0].Status != nil {
+	if got := node.serviceStatuses(node.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)); len(got) != 0 {
 		t.Fatalf("the refused status was kept: %v", got)
 	}
 }
 
-// Registration takes no status: discovery and list_local_services answer
-// from the registered record, which must never carry one.
-func TestRegistrationTakesNoStatus(t *testing.T) {
-	_, err := NewServiceFromRequest(&api.RegisterServiceRequest{
-		Service: &api.ServiceInfo{Name: "a", Type: api.ServiceType_SERVICE_TYPE_A2A, Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY}},
-		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://127.0.0.1:1"},
-	})
-	if err == nil || !strings.Contains(err.Error(), "SetServiceStatus") {
-		t.Fatalf("registration with a status: %v", err)
+// stateOf is the state of the report's one status, if any.
+func stateOf(r *api.NodeCatalogReport) api.ServiceState {
+	if len(r.GetServiceStatuses()) != 1 {
+		return api.ServiceState_SERVICE_STATE_UNSPECIFIED
 	}
-}
-
-// The registry itself refuses a status, so embedded callers that build a
-// Service and call Services().Register can't reach discovery with one.
-func TestRegistryRegisterTakesNoStatus(t *testing.T) {
-	r := NewServiceRegistry(&fakeDHT{}, 0)
-	svc := &A2AService{baseService: baseService{
-		info:    &api.ServiceInfo{Name: "a", Type: api.ServiceType_SERVICE_TYPE_A2A, Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY}},
-		backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://127.0.0.1:1"},
-	}}
-	if err := r.Register(context.Background(), svc); err == nil || !strings.Contains(err.Error(), "SetServiceStatus") {
-		t.Fatalf("Register with a status: %v", err)
-	}
-	if got := r.List(api.ServiceType_SERVICE_TYPE_UNSPECIFIED); len(got) != 0 {
-		t.Fatalf("registry lists %v", got)
-	}
+	return r.GetServiceStatuses()[0].GetStatus().GetState()
 }
 
 // An early report never pushes back the regular one, also when the least
@@ -212,7 +188,7 @@ func TestStatusChangeKeepsTheRegularDeadline(t *testing.T) {
 	if waited := time.Since(reported); waited > 2*interval {
 		t.Fatalf("the regular report came %s after the last one, want about %s", waited, interval)
 	}
-	if got.Services[0].GetStatus().GetState() != api.ServiceState_SERVICE_STATE_BUSY {
+	if stateOf(got) != api.ServiceState_SERVICE_STATE_BUSY {
 		t.Fatalf("report: %v", got)
 	}
 }

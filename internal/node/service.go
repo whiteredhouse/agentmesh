@@ -132,11 +132,6 @@ func NewServiceFromRequest(req *api.RegisterServiceRequest) (Service, error) {
 	if c, ok := req.Backend.(*api.RegisterServiceRequest_Command); ok && len(c.Command.GetCommand()) == 0 {
 		return nil, fmt.Errorf("service %q: command backend has no command", info.GetName())
 	}
-	// ServiceRegistry.Register refuses a status for every route; this
-	// refuses it before a request builds a service at all.
-	if info.GetStatus() != nil {
-		return nil, fmt.Errorf("service %q: status is set with SetServiceStatus, not at registration", info.GetName())
-	}
 	if err := api.ValidateServiceIngress(info.GetType(), info.GetIngress()); err != nil {
 		return nil, fmt.Errorf("service %q: %w", info.GetName(), err)
 	}

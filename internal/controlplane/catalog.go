@@ -34,6 +34,7 @@ const maxCatalogServices = 512
 // nodeCatalogEntry is what HandleNodeCatalog caches per reporting peer.
 type nodeCatalogEntry struct {
 	Services   []*api.ServiceInfo
+	Statuses   []*api.ServiceStatusReport // agentiscale fork
 	ReportedAt time.Time
 }
 
@@ -76,7 +77,7 @@ func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map
 			}
 			services = append(services, svc)
 		}
-		view[node.PeerID] = &api.NodeServices{Services: services, ReportTime: timestamppb.New(entry.ReportedAt)}
+		view[node.PeerID] = &api.NodeServices{Services: services, ServiceStatuses: entry.Statuses, ReportTime: timestamppb.New(entry.ReportedAt)}
 	}
 	return view
 }
@@ -139,13 +140,17 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Too many services in report (max %d)", maxCatalogServices), http.StatusBadRequest)
 		return
 	}
+	// A status time JSON cannot render would break every later
+	// /admin/status answer (agentiscale fork).
+	if len(req.ServiceStatuses) > maxCatalogServices {
+		http.Error(w, fmt.Sprintf("Too many service statuses in report (max %d)", maxCatalogServices), http.StatusBadRequest)
+		return
+	}
+	if err := api.ValidateServiceStatusReports(req.ServiceStatuses); err != nil {
+		http.Error(w, "Invalid service status: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	for _, svc := range req.Services {
-		// A status time JSON cannot render would break every later
-		// /admin/status answer (agentiscale fork).
-		if err := api.ValidateServiceStatus(svc.GetStatus()); err != nil {
-			http.Error(w, "Invalid service status: "+err.Error(), http.StatusBadRequest)
-			return
-		}
 		if svc == nil || svc.GetIngress() == nil {
 			continue
 		}
@@ -158,6 +163,7 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 	s.catalogMu.Lock()
 	s.catalog[nodeRecord.PeerID] = nodeCatalogEntry{
 		Services:   req.Services,
+		Statuses:   req.ServiceStatuses,
 		ReportedAt: time.Now(),
 	}
 	catalogEntries.Set(float64(len(s.catalog)))

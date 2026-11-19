@@ -48,3 +48,23 @@ func TestValidateServiceStatus(t *testing.T) {
 		}
 	}
 }
+
+// Each reported status names a service of a known type and holds a valid
+// status.
+func TestValidateServiceStatusReports(t *testing.T) {
+	ok := &ServiceStatusReport{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{State: ServiceState_SERVICE_STATE_IDLE}}
+	if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok}); err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]*ServiceStatusReport{
+		"nil":          nil,
+		"no name":      {Type: ServiceType_SERVICE_TYPE_A2A, Status: &ServiceStatus{}},
+		"no type":      {Name: "a", Status: &ServiceStatus{}},
+		"no status":    {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a"},
+		"invalid time": {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{Since: &timestamppb.Timestamp{Seconds: 253402300800}}},
+	} {
+		if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok, r}); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

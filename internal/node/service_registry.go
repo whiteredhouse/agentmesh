@@ -178,12 +178,6 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	if err := api.ValidateServiceIngress(info.Type, info.GetIngress()); err != nil {
 		return fmt.Errorf("service %q: %w", info.Name, err)
 	}
-	// Status is what the node says in its catalog reports (agentiscale
-	// fork; SetServiceStatus). Discovery and list_local_services answer
-	// from the registered record, so no route may register one with it.
-	if info.GetStatus() != nil {
-		return fmt.Errorf("service %q: status is set with SetServiceStatus, not at registration", info.Name)
-	}
 
 	// Policy is evaluated on type://name and the registry is keyed on name,
 	// so a second type under the same name would let a grant for one reach

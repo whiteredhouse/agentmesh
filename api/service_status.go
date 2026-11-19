@@ -35,3 +35,17 @@ func ValidateServiceStatus(st *ServiceStatus) error {
 	}
 	return nil
 }
+
+// ValidateServiceStatusReports checks the statuses a catalog report carries
+// (agentiscale fork): each names a service and holds a valid status.
+func ValidateServiceStatusReports(reports []*ServiceStatusReport) error {
+	for _, r := range reports {
+		if r == nil || r.Name == "" || r.Type == ServiceType_SERVICE_TYPE_UNSPECIFIED || r.Status == nil {
+			return fmt.Errorf("service status without a service or a status")
+		}
+		if err := ValidateServiceStatus(r.Status); err != nil {
+			return fmt.Errorf("service %q: %w", r.Name, err)
+		}
+	}
+	return nil
+}

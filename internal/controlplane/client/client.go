@@ -259,7 +259,13 @@ func (c *Client) FetchRevocations(ctx context.Context, biscuit []byte) (*api.Rev
 // biscuit and signed challenge: reports the services currently registered on
 // the node.
 func (c *Client) ReportCatalog(ctx context.Context, biscuit []byte, services []*api.ServiceInfo) error {
-	payload, err := proto.Marshal(&api.NodeCatalogReport{Services: services})
+	return c.ReportCatalogWithStatus(ctx, biscuit, services, nil)
+}
+
+// ReportCatalogWithStatus is ReportCatalog with what each service is doing
+// now (agentiscale fork).
+func (c *Client) ReportCatalogWithStatus(ctx context.Context, biscuit []byte, services []*api.ServiceInfo, statuses []*api.ServiceStatusReport) error {
+	payload, err := proto.Marshal(&api.NodeCatalogReport{Services: services, ServiceStatuses: statuses})
 	if err != nil {
 		return fmt.Errorf("failed to encode catalog report: %w", err)
 	}

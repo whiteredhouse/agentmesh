@@ -57,21 +57,16 @@ func (n *AgentMeshNode) SetServiceStatus(serviceType api.ServiceType, name strin
 	return nil
 }
 
-// withServiceStatus returns services with the recorded status of each, as
-// copies: the registry's own records stay without status.
-func (n *AgentMeshNode) withServiceStatus(services []*api.ServiceInfo) []*api.ServiceInfo {
+// serviceStatuses returns the recorded status of each of services, in their
+// order. A status for a service that isn't registered is left out.
+func (n *AgentMeshNode) serviceStatuses(services []*api.ServiceInfo) []*api.ServiceStatusReport {
 	n.serviceStatusMu.Lock()
 	defer n.serviceStatusMu.Unlock()
-	if len(n.serviceStatus) == 0 {
-		return services
-	}
-	out := make([]*api.ServiceInfo, 0, len(services))
+	var out []*api.ServiceStatusReport
 	for _, svc := range services {
 		if status, ok := n.serviceStatus[serviceStatusKey{svc.GetType(), svc.GetName()}]; ok {
-			svc = proto.Clone(svc).(*api.ServiceInfo)
-			svc.Status = proto.Clone(status).(*api.ServiceStatus)
+			out = append(out, &api.ServiceStatusReport{Type: svc.GetType(), Name: svc.GetName(), Status: proto.Clone(status).(*api.ServiceStatus)})
 		}
-		out = append(out, svc)
 	}
 	return out
 }

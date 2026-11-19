@@ -2984,8 +2984,8 @@ func (n *AgentMeshNode) reportNodeCatalog(ctx context.Context) error {
 		return fmt.Errorf("node has no identity token to report its catalog")
 	}
 
-	services := n.withServiceStatus(n.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED))
-	if err := n.controlPlane(controlPlaneURL).ReportCatalog(ctx, token, services); err != nil {
+	services := n.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)
+	if err := n.controlPlane(controlPlaneURL).ReportCatalogWithStatus(ctx, token, services, n.serviceStatuses(services)); err != nil {
 		return fmt.Errorf("failed to report node catalog: %w", err)
 	}
 	return nil
