@@ -101,6 +101,9 @@ const (
 	// Four attempts per default window is the trade against load on large
 	// meshes, where an operator raising the grace period can raise this too.
 	DefaultControlPlaneSyncInterval = 15 * time.Minute
+	// DefaultCatalogReportMinGap is the least time between two catalog
+	// reports that status changes ask for (agentiscale fork).
+	DefaultCatalogReportMinGap = 5 * time.Second
 
 	// reprovideRetryInterval is the first retry after a backend was withheld,
 	// doubling up to the mesh's reprovide interval. Backends commonly start
@@ -315,8 +318,14 @@ type AgentMeshNode struct {
 
 	catalogOnce      sync.Once
 	catalogMCPServer *mcp.Server
-	egressOnce       sync.Once
-	egressHandler    http.Handler
+	// serviceStatus is what each local service is doing now (agentiscale
+	// fork; see SetServiceStatus), and catalogReportTrigger asks for an early
+	// catalog report when it changes.
+	serviceStatusMu      sync.Mutex
+	serviceStatus        map[serviceStatusKey]*api.ServiceStatus
+	catalogReportTrigger chan struct{}
+	egressOnce           sync.Once
+	egressHandler        http.Handler
 }
 
 // SetTokenSource configures the live platform/OIDC token source presented as
@@ -541,6 +550,7 @@ func NewAgentMeshNode(cfg Options) (*AgentMeshNode, error) {
 		authSuccess:             make(chan struct{}),
 		reprovideTrigger:        make(chan struct{}, 1),
 		controlPlaneSyncTrigger: make(chan struct{}, 1),
+		catalogReportTrigger:    make(chan struct{}, 1),
 		tokenSource:             cfg.TokenSource,
 		BiscuitTimeout:          cfg.BiscuitTimeout,
 		logger:                  golog.Logger("agentmesh-node"),
@@ -903,7 +913,7 @@ func (n *AgentMeshNode) Start(ctx context.Context) error {
 
 	// Periodically self-report local services to the control plane, so an
 	// admin can see mesh-wide service topology.
-	n.startCatalogReportLoop(ctx, n.config.CatalogReportInitialDelay, n.config.CatalogReportInterval)
+	n.startCatalogReportLoop(ctx, n.config.CatalogReportInitialDelay, n.config.CatalogReportInterval, n.config.CatalogReportMinGap)
 
 	return nil
 }
@@ -2975,7 +2985,7 @@ func (n *AgentMeshNode) reportNodeCatalog(ctx context.Context) error {
 	}
 
 	services := n.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)
-	if err := n.controlPlane(controlPlaneURL).ReportCatalog(ctx, token, services); err != nil {
+	if err := n.controlPlane(controlPlaneURL).ReportCatalogWithStatus(ctx, token, services, n.serviceStatuses(services)); err != nil {
 		return fmt.Errorf("failed to report node catalog: %w", err)
 	}
 	return nil
@@ -2987,7 +2997,7 @@ func (n *AgentMeshNode) reportNodeCatalog(ctx context.Context) error {
 // A failure is logged at Warn once and at Debug while it persists: the
 // usual causes (control plane unreachable, path not routed) do not change
 // from one tick to the next.
-func (n *AgentMeshNode) startCatalogReportLoop(ctx context.Context, initialDelay, interval time.Duration) {
+func (n *AgentMeshNode) startCatalogReportLoop(ctx context.Context, initialDelay, interval, minGap time.Duration) {
 	if interval <= 0 {
 		interval = 1 * time.Minute
 	}
@@ -2996,19 +3006,39 @@ func (n *AgentMeshNode) startCatalogReportLoop(ctx context.Context, initialDelay
 	}
 
 	go func() {
-		wait := initialDelay
+		jitter := func() time.Duration { return time.Duration(rand.Int63n(int64(interval/10) + 1)) }
+		// next is the regular report's deadline, which an early report
+		// asked for by a status change never pushes back.
+		next := time.Now().Add(initialDelay + jitter())
 		failures := 0
+		var last time.Time
 		for {
-			timer := time.NewTimer(wait + time.Duration(rand.Int63n(int64(interval/10)+1)))
+			timer := time.NewTimer(time.Until(next))
 			select {
 			case <-ctx.Done():
 				timer.Stop()
 				return
 			case <-timer.C:
+			case <-n.catalogReportTrigger:
+				// A service's status changed (agentiscale fork): report
+				// early, but no sooner than minGap after the last report,
+				// and never later than the regular deadline.
+				at := next
+				if early := last.Add(minGap); early.Before(at) {
+					at = early
+				}
+				timer.Reset(max(time.Until(at), 0))
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
 			}
-			wait = interval
 
 			err := n.reportNodeCatalog(ctx)
+			last = time.Now()
+			next = last.Add(interval + jitter())
 			switch {
 			case err != nil && failures == 0:
 				logger.Warnf("Node catalog report failed: %v", err)

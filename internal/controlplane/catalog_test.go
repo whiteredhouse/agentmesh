@@ -35,6 +35,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // postCatalog POSTs a raw body to /nodes/catalog under the given
@@ -79,11 +80,25 @@ func bearer(biscuit []byte) string {
 
 func catalogBody(t *testing.T, services ...*api.ServiceInfo) []byte {
 	t.Helper()
-	body, err := proto.Marshal(&api.NodeCatalogReport{Services: services})
+	return reportBody(t, &api.NodeCatalogReport{Services: services})
+}
+
+func reportBody(t *testing.T, report *api.NodeCatalogReport) []byte {
+	t.Helper()
+	body, err := proto.Marshal(report)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
 	return body
+}
+
+// statusBody reports service a with status st.
+func statusBody(t *testing.T, st *api.ServiceStatusReport) []byte {
+	t.Helper()
+	return reportBody(t, &api.NodeCatalogReport{
+		Services:        []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a"}},
+		ServiceStatuses: []*api.ServiceStatusReport{st},
+	})
 }
 
 // adminStatus fetches /admin/status with the admin token.
@@ -149,7 +164,12 @@ func TestHandleNodeCatalog(t *testing.T) {
 	}
 
 	// A second report replaces the first rather than accumulating.
-	body = catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner"})
+	busy := &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner",
+		Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: timestamppb.New(time.Unix(1700000000, 0)), InputRequired: 1}}
+	body = reportBody(t, &api.NodeCatalogReport{
+		Services:        []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner"}},
+		ServiceStatuses: []*api.ServiceStatusReport{busy},
+	})
 	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, body); got != http.StatusNoContent {
 		t.Fatalf("second report: got status %d, want %d", got, http.StatusNoContent)
 	}
@@ -167,6 +187,9 @@ func TestHandleNodeCatalog(t *testing.T) {
 	want := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner"}
 	if len(got.GetServices()) != 1 || !proto.Equal(got.GetServices()[0], want) || got.GetReportTime() == nil {
 		t.Fatalf("node_catalog view = %+v, want services %+v", got, want)
+	}
+	if len(got.GetServiceStatuses()) != 1 || !proto.Equal(got.GetServiceStatuses()[0], busy) {
+		t.Fatalf("node_catalog statuses = %v, want %v", got.GetServiceStatuses(), busy)
 	}
 
 	// An empty report is valid and clears the node's services.
@@ -239,6 +262,13 @@ func TestHandleNodeCatalog_Rejections(t *testing.T) {
 		{name: "missing challenge", auth: bearer(biscuitBytes), body: ok, want: http.StatusUnauthorized},
 		{name: "invalid body", auth: bearer(biscuitBytes), priv: priv, body: []byte(`{"services":[]}`), want: http.StatusBadRequest},
 		{name: "too many services", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, tooMany...), want: http.StatusBadRequest},
+		// A status time JSON cannot render would break /admin/status.
+		{name: "status since out of range", auth: bearer(biscuitBytes), priv: priv, body: statusBody(t, &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
+			Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: &timestamppb.Timestamp{Seconds: 253402300800}}}), want: http.StatusBadRequest},
+		{name: "status input_required_since out of range", auth: bearer(biscuitBytes), priv: priv, body: statusBody(t, &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
+			Status: &api.ServiceStatus{InputRequired: 1, InputRequiredSince: &timestamppb.Timestamp{Seconds: 253402300800}}}), want: http.StatusBadRequest},
+		{name: "status without a status", auth: bearer(biscuitBytes), priv: priv, body: statusBody(t, &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a"}), want: http.StatusBadRequest},
+		{name: "status without a service", auth: bearer(biscuitBytes), priv: priv, body: statusBody(t, &api.ServiceStatusReport{Status: &api.ServiceStatus{}}), want: http.StatusBadRequest},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

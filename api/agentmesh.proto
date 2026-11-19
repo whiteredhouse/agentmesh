@@ -183,6 +183,37 @@ message ServiceInfo {
   ServiceIngress ingress = 4;
 }
 
+// ServiceState is whether a service is working on a request.
+enum ServiceState {
+  SERVICE_STATE_UNSPECIFIED = 0;
+  // Ready for work.
+  SERVICE_STATE_IDLE = 1;
+  // Working on a request.
+  SERVICE_STATE_BUSY = 2;
+}
+
+// ServiceStatus is a coarse, content-free status of a service: never what a
+// request asks or returns.
+message ServiceStatus {
+  ServiceState state = 1;
+  // When the service entered state.
+  google.protobuf.Timestamp since = 2;
+  // How many tasks wait for their caller's input (A2A input-required),
+  // whatever state is, and since when the longest one has waited.
+  uint32 input_required = 3;
+  google.protobuf.Timestamp input_required_since = 4;
+}
+
+// ServiceStatusReport is the status of one of the node's own services, by
+// the service's type and name. It rides only in catalog reports and the
+// control plane's view of them: ServiceInfo, which registration and
+// discovery share, has no status (agentiscale fork).
+message ServiceStatusReport {
+  ServiceType type = 1;
+  string name = 2;
+  ServiceStatus status = 3;
+}
+
 message CommandBackend {
   repeated string command = 1;
   map<string, string> env = 2;
@@ -678,6 +709,9 @@ message TokenRefreshResponse {
 // ever describe itself. Display-only; carries no authorization weight.
 message NodeCatalogReport {
   repeated ServiceInfo services = 1;
+  // What each service is doing now, for services the node reports a status
+  // for (agentiscale fork; field numbers from 1000 stay clear of upstream).
+  repeated ServiceStatusReport service_statuses = 1000;
 }
 
 message TokenRevokeRequest {
@@ -828,6 +862,8 @@ message RouterLease {
 message NodeServices {
   repeated ServiceInfo services = 1;
   google.protobuf.Timestamp report_time = 2;
+  // From the node's last catalog report (agentiscale fork).
+  repeated ServiceStatusReport service_statuses = 1000;
 }
 
 // AdminStatusResponse answers GET /admin/status: everything the console
