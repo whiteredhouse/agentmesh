@@ -132,6 +132,12 @@ func NewServiceFromRequest(req *api.RegisterServiceRequest) (Service, error) {
 	if c, ok := req.Backend.(*api.RegisterServiceRequest_Command); ok && len(c.Command.GetCommand()) == 0 {
 		return nil, fmt.Errorf("service %q: command backend has no command", info.GetName())
 	}
+	// Status is what the node says in its catalog reports (agentiscale
+	// fork; SetServiceStatus). A registered record would carry it into
+	// discovery and list_local_services, so registration takes none.
+	if info.GetStatus() != nil {
+		return nil, fmt.Errorf("service %q: status is set with SetServiceStatus, not at registration", info.GetName())
+	}
 	if err := api.ValidateServiceIngress(info.GetType(), info.GetIngress()); err != nil {
 		return nil, fmt.Errorf("service %q: %w", info.GetName(), err)
 	}

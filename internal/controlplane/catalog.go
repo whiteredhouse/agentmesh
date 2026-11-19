@@ -140,6 +140,12 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, svc := range req.Services {
+		// A status time JSON cannot render would break every later
+		// /admin/status answer (agentiscale fork).
+		if err := api.ValidateServiceStatus(svc.GetStatus()); err != nil {
+			http.Error(w, "Invalid service status: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if svc == nil || svc.GetIngress() == nil {
 			continue
 		}

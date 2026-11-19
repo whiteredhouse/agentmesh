@@ -3006,11 +3006,14 @@ func (n *AgentMeshNode) startCatalogReportLoop(ctx context.Context, initialDelay
 	}
 
 	go func() {
-		wait := initialDelay
+		jitter := func() time.Duration { return time.Duration(rand.Int63n(int64(interval/10) + 1)) }
+		// next is the regular report's deadline, which an early report
+		// asked for by a status change never pushes back.
+		next := time.Now().Add(initialDelay + jitter())
 		failures := 0
 		var last time.Time
 		for {
-			timer := time.NewTimer(wait + time.Duration(rand.Int63n(int64(interval/10)+1)))
+			timer := time.NewTimer(time.Until(next))
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -3018,20 +3021,24 @@ func (n *AgentMeshNode) startCatalogReportLoop(ctx context.Context, initialDelay
 			case <-timer.C:
 			case <-n.catalogReportTrigger:
 				// A service's status changed (agentiscale fork): report
-				// early, but no sooner than minGap after the last report.
-				timer.Stop()
-				if gap := minGap - time.Since(last); !last.IsZero() && gap > 0 {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(gap):
-					}
+				// early, but no sooner than minGap after the last report,
+				// and never later than the regular deadline.
+				at := next
+				if early := last.Add(minGap); early.Before(at) {
+					at = early
+				}
+				timer.Reset(max(time.Until(at), 0))
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
 				}
 			}
-			wait = interval
 
 			err := n.reportNodeCatalog(ctx)
 			last = time.Now()
+			next = last.Add(interval + jitter())
 			switch {
 			case err != nil && failures == 0:
 				logger.Warnf("Node catalog report failed: %v", err)

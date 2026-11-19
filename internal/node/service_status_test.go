@@ -19,6 +19,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -71,9 +72,13 @@ func TestServiceStatusInCatalogReport(t *testing.T) {
 	node := newCatalogTestNode(t, url)
 	node.SetIdentityCache([]byte("biscuit"))
 	since := timestamppb.New(time.Unix(1700000000, 0))
-	node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: since, InputRequired: 2})
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: since, InputRequired: 2}); err != nil {
+		t.Fatal(err)
+	}
 	// Same name, other type: not the registered service.
-	node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_A2A, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_IDLE})
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_A2A, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_IDLE}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := node.reportNodeCatalog(context.Background()); err != nil {
 		t.Fatal(err)
@@ -88,7 +93,9 @@ func TestServiceStatusInCatalogReport(t *testing.T) {
 		}
 	}
 
-	node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", nil)
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", nil); err != nil {
+		t.Fatal(err)
+	}
 	if err := node.reportNodeCatalog(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +125,9 @@ func TestServiceStatusChangeReportsEarly(t *testing.T) {
 	}
 
 	busy := &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: timestamppb.Now()}
-	node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", busy)
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", busy); err != nil {
+		t.Fatal(err)
+	}
 	early := nextReport(t, reports, 5*time.Second)
 	if early.Services[0].GetStatus().GetState() != api.ServiceState_SERVICE_STATE_BUSY {
 		t.Fatalf("early report: %v", early)
@@ -128,12 +137,66 @@ func TestServiceStatusChangeReportsEarly(t *testing.T) {
 	}
 
 	// Only the time moved: nothing to report early.
-	node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: timestamppb.New(time.Now().Add(time.Second))})
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: timestamppb.New(time.Now().Add(time.Second))}); err != nil {
+		t.Fatal(err)
+	}
 	noReport(t, reports, 2*gap)
 
 	busy.InputRequired = 1
-	node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", busy)
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", busy); err != nil {
+		t.Fatal(err)
+	}
 	if got := nextReport(t, reports, 5*time.Second); got.Services[0].GetStatus().GetInputRequired() != 1 {
 		t.Fatalf("report after a task began waiting for input: %v", got)
+	}
+}
+
+// A status time JSON cannot render is refused at the node, as the control
+// plane would refuse the whole report.
+func TestSetServiceStatusRefusesInvalidTimes(t *testing.T) {
+	node := newCatalogTestNode(t, "")
+	bad := &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: &timestamppb.Timestamp{Seconds: 253402300800}}
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", bad); err == nil {
+		t.Fatal("accepted a time past year 9999")
+	}
+	if got := node.withServiceStatus(node.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)); got[0].Status != nil {
+		t.Fatalf("the refused status was kept: %v", got)
+	}
+}
+
+// Registration takes no status: discovery and list_local_services answer
+// from the registered record, which must never carry one.
+func TestRegistrationTakesNoStatus(t *testing.T) {
+	_, err := NewServiceFromRequest(&api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Name: "a", Type: api.ServiceType_SERVICE_TYPE_A2A, Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY}},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://127.0.0.1:1"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "SetServiceStatus") {
+		t.Fatalf("registration with a status: %v", err)
+	}
+}
+
+// An early report never pushes back the regular one, also when the least
+// gap between early reports is longer than the regular interval.
+func TestStatusChangeKeepsTheRegularDeadline(t *testing.T) {
+	url, reports := catalogReports(t)
+	node := newCatalogTestNode(t, url)
+	node.SetIdentityCache([]byte("biscuit"))
+	node.catalogReportTrigger = make(chan struct{}, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const interval = 200 * time.Millisecond
+	node.startCatalogReportLoop(ctx, 10*time.Millisecond, interval, time.Hour)
+	nextReport(t, reports, 5*time.Second)
+	reported := time.Now()
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY}); err != nil {
+		t.Fatal(err)
+	}
+	got := nextReport(t, reports, 5*time.Second)
+	if waited := time.Since(reported); waited > 2*interval {
+		t.Fatalf("the regular report came %s after the last one, want about %s", waited, interval)
+	}
+	if got.Services[0].GetStatus().GetState() != api.ServiceState_SERVICE_STATE_BUSY {
+		t.Fatalf("report: %v", got)
 	}
 }

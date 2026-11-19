@@ -35,6 +35,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // postCatalog POSTs a raw body to /nodes/catalog under the given
@@ -239,6 +240,11 @@ func TestHandleNodeCatalog_Rejections(t *testing.T) {
 		{name: "missing challenge", auth: bearer(biscuitBytes), body: ok, want: http.StatusUnauthorized},
 		{name: "invalid body", auth: bearer(biscuitBytes), priv: priv, body: []byte(`{"services":[]}`), want: http.StatusBadRequest},
 		{name: "too many services", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, tooMany...), want: http.StatusBadRequest},
+		// A status time JSON cannot render would break /admin/status.
+		{name: "status since out of range", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
+			Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: &timestamppb.Timestamp{Seconds: 253402300800}}}), want: http.StatusBadRequest},
+		{name: "status input_required_since out of range", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
+			Status: &api.ServiceStatus{InputRequired: 1, InputRequiredSince: &timestamppb.Timestamp{Seconds: 253402300800}}}), want: http.StatusBadRequest},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

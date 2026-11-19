@@ -29,8 +29,13 @@ type serviceStatusKey struct {
 // node's catalog reports carry (never its discovery records). nil forgets
 // it. A change of state or of the number of tasks waiting for input sends a
 // catalog report early, no sooner than CatalogReportMinGap after the last
-// one; a change of the times alone waits for the next regular report.
-func (n *AgentMeshNode) SetServiceStatus(serviceType api.ServiceType, name string, status *api.ServiceStatus) {
+// one; a change of the times alone waits for the next regular report. A
+// status with a time JSON cannot render is refused, as the control plane
+// would refuse the whole report.
+func (n *AgentMeshNode) SetServiceStatus(serviceType api.ServiceType, name string, status *api.ServiceStatus) error {
+	if err := api.ValidateServiceStatus(status); err != nil {
+		return err
+	}
 	key := serviceStatusKey{serviceType, name}
 	n.serviceStatusMu.Lock()
 	old := n.serviceStatus[key]
@@ -49,6 +54,7 @@ func (n *AgentMeshNode) SetServiceStatus(serviceType api.ServiceType, name strin
 		default:
 		}
 	}
+	return nil
 }
 
 // withServiceStatus returns services with the recorded status of each, as
