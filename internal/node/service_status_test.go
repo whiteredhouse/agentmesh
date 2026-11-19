@@ -176,6 +176,22 @@ func TestRegistrationTakesNoStatus(t *testing.T) {
 	}
 }
 
+// The registry itself refuses a status, so embedded callers that build a
+// Service and call Services().Register can't reach discovery with one.
+func TestRegistryRegisterTakesNoStatus(t *testing.T) {
+	r := NewServiceRegistry(&fakeDHT{}, 0)
+	svc := &A2AService{baseService: baseService{
+		info:    &api.ServiceInfo{Name: "a", Type: api.ServiceType_SERVICE_TYPE_A2A, Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY}},
+		backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: "http://127.0.0.1:1"},
+	}}
+	if err := r.Register(context.Background(), svc); err == nil || !strings.Contains(err.Error(), "SetServiceStatus") {
+		t.Fatalf("Register with a status: %v", err)
+	}
+	if got := r.List(api.ServiceType_SERVICE_TYPE_UNSPECIFIED); len(got) != 0 {
+		t.Fatalf("registry lists %v", got)
+	}
+}
+
 // An early report never pushes back the regular one, also when the least
 // gap between early reports is longer than the regular interval.
 func TestStatusChangeKeepsTheRegularDeadline(t *testing.T) {
