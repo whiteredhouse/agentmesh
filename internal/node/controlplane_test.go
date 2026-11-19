@@ -803,7 +803,7 @@ func TestStartCatalogReportLoop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	node.startCatalogReportLoop(ctx, 10*time.Millisecond, 20*time.Millisecond)
+	node.startCatalogReportLoop(ctx, 10*time.Millisecond, 20*time.Millisecond, 0)
 
 	for i := 0; i < 3; i++ {
 		select {

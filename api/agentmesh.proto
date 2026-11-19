@@ -181,6 +181,31 @@ message ServiceInfo {
   string description = 3;
   // Optional external ingress exposure for this service.
   ServiceIngress ingress = 4;
+  // What the service is doing now, as its node reports it in its catalog
+  // (POST /nodes/catalog). Discovery records never carry it. Unset when the
+  // node does not report a status for the service.
+  ServiceStatus status = 5;
+}
+
+// ServiceState is whether a service is working on a request.
+enum ServiceState {
+  SERVICE_STATE_UNSPECIFIED = 0;
+  // Ready for work.
+  SERVICE_STATE_IDLE = 1;
+  // Working on a request.
+  SERVICE_STATE_BUSY = 2;
+}
+
+// ServiceStatus is a coarse, content-free status of a service: never what a
+// request asks or returns.
+message ServiceStatus {
+  ServiceState state = 1;
+  // When the service entered state.
+  google.protobuf.Timestamp since = 2;
+  // How many tasks wait for their caller's input (A2A input-required),
+  // whatever state is, and since when the longest one has waited.
+  uint32 input_required = 3;
+  google.protobuf.Timestamp input_required_since = 4;
 }
 
 message CommandBackend {

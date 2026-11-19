@@ -171,6 +171,10 @@ type Options struct {
 	// report is sent, so services configured at startup have registered by
 	// then. Zero uses the default.
 	CatalogReportInitialDelay time.Duration
+	// CatalogReportMinGap is the least time between two catalog reports
+	// when a service's status change asks for an early one (agentiscale
+	// fork; see SetServiceStatus). Zero uses the default.
+	CatalogReportMinGap time.Duration
 	// TokenSource is the optional live platform/OIDC token provider presented
 	// as TokenRefreshRequest.jwt during RefreshEnrollment.
 	TokenSource TokenSource
@@ -257,6 +261,9 @@ func (o *Options) Default() {
 	}
 	if o.CatalogReportInitialDelay <= 0 {
 		o.CatalogReportInitialDelay = 5 * time.Second
+	}
+	if o.CatalogReportMinGap <= 0 {
+		o.CatalogReportMinGap = DefaultCatalogReportMinGap
 	}
 	if o.ControlPlaneSyncJitter <= 0 && o.ControlPlaneSyncInterval > 0 {
 		o.ControlPlaneSyncJitter = o.ControlPlaneSyncInterval / 10
