@@ -89,10 +89,11 @@ func NewMCPServer(node *AgentMeshNode) *mcp.Server {
 	}, node.handleGetMeshInfo)
 
 	// Add the call_remote_tool tool.
-	mcp.AddTool(mcpServer, &mcp.Tool{
+	mcpServer.AddTool(&mcp.Tool{
 		Name:        "call_remote_tool",
 		Description: "Call an MCP tool on a remote agent",
-	}, node.handleCallRemoteTool)
+		InputSchema: callRemoteToolSchema(),
+	}, node.callRemoteTool)
 
 	// Add the find_remote_tools tool.
 	mcp.AddTool(mcpServer, &mcp.Tool{

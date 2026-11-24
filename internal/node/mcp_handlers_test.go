@@ -1110,3 +1110,98 @@ func newPreDiscoverMCPHandler(t *testing.T, tools []*mcp.Tool) http.Handler {
 		real.ServeHTTP(w, r)
 	})
 }
+
+// call_remote_tool hands the remote tool its arguments as the caller wrote
+// them: an integer above 2^53 must not round through a float64.
+func TestCallRemoteTool_PreservesArguments(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	nodeA, cleanupA := startBareNode(t, ctx)
+	defer cleanupA()
+	nodeB, cleanupB := startBareNode(t, ctx)
+	defer cleanupB()
+
+	if err := nodeA.Host.Connect(ctx, peer.AddrInfo{ID: nodeB.Host.ID(), Addrs: nodeB.Host.Addrs()}); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	_, rootPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("gen root key: %v", err)
+	}
+	rootPub := rootPriv.Public().(ed25519.PublicKey)
+	if err := buildAndSaveBiscuit(nodeA, rootPriv); err != nil {
+		t.Fatalf("buildAndSaveBiscuit: %v", err)
+	}
+	nodeB.keysMu.Lock()
+	nodeB.trustedKeys = append(nodeB.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeB.keysMu.Unlock()
+	nodeBIdentity, err := identity.MintBootstrapBiscuitToken(rootPriv, nodeB.Host.ID(), api.RoleNode, time.Now().Add(time.Hour), publishEverything, nil)
+	if err != nil {
+		t.Fatalf("mint nodeB identity: %v", err)
+	}
+	nodeB.SetIdentityCache(nodeBIdentity)
+	nodeA.keysMu.Lock()
+	nodeA.trustedKeys = append(nodeA.trustedKeys, TrustedKey{Key: rootPub, ReceivedAt: time.Now()})
+	nodeA.keysMu.Unlock()
+
+	// The hosted tool echoes the arguments it received, byte for byte.
+	hosted := mcp.NewServer(&mcp.Implementation{Name: "hosted", Version: "0"}, nil)
+	hosted.AddTool(&mcp.Tool{Name: "get_record", InputSchema: map[string]any{"type": "object"}}, func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(req.Params.Arguments)}}}, nil
+	})
+	hostedSrv := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return hosted }, &mcp.StreamableHTTPOptions{Stateless: true}))
+	defer hostedSrv.Close()
+	if err := nodeB.RegisterService(ctx, &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_MCP, Name: "records"},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: hostedSrv.URL},
+	}); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+	defer func() { _ = nodeB.UnregisterService(ctx, "records") }()
+
+	srv := httptest.NewServer(NewMCPHandler(nodeA))
+	defer srv.Close()
+	session, err := mcp.NewClient(&mcp.Implementation{Name: "tc", Version: "0.0.1"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: srv.URL + "/mcp"}, nil)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	call := func(arguments string) (*mcp.CallToolResult, error) {
+		return session.CallTool(ctx, &mcp.CallToolParams{Name: "call_remote_tool", Arguments: json.RawMessage(
+			`{"peer_id":"` + nodeB.Host.ID().String() + `","tool_name":"mcp://records/get_record","arguments":` + arguments + `}`)})
+	}
+	res, err := call(`{"id": 9007199254740993, "ratio": 0.10000000000000001}`)
+	if err != nil || res.IsError {
+		t.Fatalf("call_remote_tool: err=%v res=%+v", err, res)
+	}
+	if got := res.Content[0].(*mcp.TextContent).Text; got != `{"id":9007199254740993,"ratio":0.10000000000000001}` {
+		t.Fatalf("the remote tool got %s", got)
+	}
+
+	res, err = call(`[1]`)
+	if err != nil || !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "JSON object") {
+		t.Fatalf("array arguments: err=%v res=%+v", err, res)
+	}
+
+	tools, err := session.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "call_remote_tool" {
+			b, _ := json.Marshal(tool.InputSchema)
+			var schema struct {
+				Properties map[string]struct {
+					Type string `json:"type"`
+				} `json:"properties"`
+				Required []string `json:"required"`
+			}
+			if err := json.Unmarshal(b, &schema); err != nil || schema.Properties["arguments"].Type != "object" || len(schema.Required) != 2 {
+				t.Fatalf("call_remote_tool schema: %s", b)
+			}
+		}
+	}
+}

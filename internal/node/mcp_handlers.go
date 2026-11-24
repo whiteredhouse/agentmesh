@@ -15,6 +15,7 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,7 +25,9 @@ import (
 	"time"
 
 	"github.com/google/agentmesh/api"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -157,12 +160,14 @@ func (n *AgentMeshNode) handleGetMeshInfoRemote(ctx context.Context, req *mcp.Ca
 //
 // Arguments is a JSON object whose shape matches the target server's
 // input_schema (use describe_remote_tool to fetch it). Earlier revisions
-// took a stringified JSON blob here; that footgun is gone.
+// took a stringified JSON blob here; that footgun is gone. It stays raw JSON
+// from the caller to the remote server: decoding it into Go values would turn
+// every number into a float64 and change integers above 2^53.
 type CallRemoteToolParams struct {
-	PeerID         string         `json:"peer_id" jsonschema:"The Peer ID of the target agent"`
-	ToolName       string         `json:"tool_name" jsonschema:"The name of the server to call"`
-	Arguments      map[string]any `json:"arguments,omitempty" jsonschema:"Server arguments as a JSON object whose keys match the target server's input_schema. Call describe_remote_tool first to learn the schema."`
-	RequiredLabels string         `json:"required_labels,omitempty" jsonschema:"Comma-separated key=value pairs (e.g. 'region=us-east-1,team=platform'). Fails closed: the call is rejected unless the peer attests every one of them. Empty means no requirement."`
+	PeerID         string          `json:"peer_id" jsonschema:"The Peer ID of the target agent"`
+	ToolName       string          `json:"tool_name" jsonschema:"The name of the server to call"`
+	Arguments      json.RawMessage `json:"arguments,omitempty"`
+	RequiredLabels string          `json:"required_labels,omitempty" jsonschema:"Comma-separated key=value pairs (e.g. 'region=us-east-1,team=platform'). Fails closed: the call is rejected unless the peer attests every one of them. Empty means no requirement."`
 }
 
 // handleCallRemoteTool implements the call_remote_tool tool.
@@ -176,11 +181,56 @@ func (n *AgentMeshNode) handleCallRemoteTool(ctx context.Context, req *mcp.CallT
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid required_labels: %w", err)
 	}
-	res, err := n.CallMCPTool(ctx, targetPeer, params.ToolName, params.Arguments, requiredLabels)
+	var arguments any
+	switch trimmed := bytes.TrimSpace(params.Arguments); {
+	case len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")):
+	case trimmed[0] == '{' && json.Valid(trimmed):
+		arguments = json.RawMessage(trimmed)
+	default:
+		return nil, nil, errors.New("arguments must be a JSON object")
+	}
+	res, err := n.CallMCPTool(ctx, targetPeer, params.ToolName, arguments, requiredLabels)
 	if err != nil {
 		return nil, nil, err
 	}
 	return res, nil, nil
+}
+
+const callRemoteToolArgumentsDescription = "Server arguments as a JSON object whose keys match the target server's input_schema. Call describe_remote_tool first to learn the schema."
+
+// callRemoteToolSchema is call_remote_tool's input schema. The tool is
+// registered without the SDK's typed wrapper, which would decode the
+// arguments into a map and encode them again, losing integer precision.
+func callRemoteToolSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[CallRemoteToolParams](nil)
+	if err != nil {
+		panic(fmt.Sprintf("call_remote_tool schema: %v", err))
+	}
+	schema.Properties["arguments"] = &jsonschema.Schema{Type: "object", Description: callRemoteToolArgumentsDescription}
+	return schema
+}
+
+// callRemoteTool serves call_remote_tool with its arguments left as the
+// caller sent them.
+func (n *AgentMeshNode) callRemoteTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var params CallRemoteToolParams
+	err := errors.New("missing arguments")
+	if req.Params != nil && len(req.Params.Arguments) > 0 {
+		err = json.Unmarshal(req.Params.Arguments, &params)
+	}
+	var res *mcp.CallToolResult
+	if err == nil {
+		res, _, err = n.handleCallRemoteTool(ctx, req, params)
+	}
+	if err != nil {
+		var wireErr *jsonrpc.Error
+		if errors.As(err, &wireErr) {
+			return nil, err
+		}
+		res = &mcp.CallToolResult{}
+		res.SetError(err)
+	}
+	return res, nil
 }
 
 // FindRemoteToolsParams defines the parameters for the
