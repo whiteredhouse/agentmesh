@@ -17,6 +17,7 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -99,9 +100,34 @@ func TestServiceRegistry_Metadata(t *testing.T) {
 	if err := r.Unregister(context.Background(), "agent"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.metadata) != 0 {
-		t.Fatalf("metadata kept after unregister: %v", r.metadata)
+	if len(r.infos) != 0 {
+		t.Fatalf("info kept after unregister: %v", r.infos)
 	}
+}
+
+// The registry answers from its own copy of the registration: a caller
+// reusing its ServiceInfo after Register returns changes nothing and
+// races with nothing (run with -race).
+func TestServiceRegistry_OwnsRegisteredInfo(t *testing.T) {
+	r := newServiceRegistryForTest(&fakeDHT{})
+	svc := newFakeSvc("agent", api.ServiceType_SERVICE_TYPE_A2A)
+	svc.info.Metadata = map[string]string{"team": "web"}
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 1000 {
+			svc.info.Metadata["team"] = fmt.Sprint(i)
+		}
+	}()
+	for range 1000 {
+		if got := metadataOf(t, r, "agent"); got["team"] != "web" {
+			t.Fatalf("listed the caller's map: %v", got)
+		}
+	}
+	<-done
 }
 
 func TestServiceRegistry_MetadataRefusals(t *testing.T) {

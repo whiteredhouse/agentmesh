@@ -22,16 +22,18 @@ import (
 
 // Service metadata (ServiceInfo.metadata) is owner-supplied key/value data
 // about one service, such as a maintenance note. Agent Mesh carries it but
-// never interprets it, so the bounds only keep it cheap to carry in
-// list_local_services answers and catalog reports.
+// never interprets it. The bounds keep it a small share of a catalog
+// report: at the most services a report may carry (512), metadata at its
+// limit takes under 600 KiB of the control plane's 1 MiB request limit,
+// leaving the rest for names, descriptions and statuses.
 const (
 	// MaxServiceMetadataEntries bounds the number of keys on one service.
-	MaxServiceMetadataEntries = 32
+	MaxServiceMetadataEntries = 16
 	// MaxServiceMetadataValueLen bounds one value, in bytes.
-	MaxServiceMetadataValueLen = 1024
+	MaxServiceMetadataValueLen = 512
 	// MaxServiceMetadataBytes bounds all keys and values of one service
 	// together, in bytes.
-	MaxServiceMetadataBytes = 8 * 1024
+	MaxServiceMetadataBytes = 1024
 )
 
 // ValidateServiceMetadata checks a service's metadata: at most
