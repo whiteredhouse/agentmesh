@@ -4276,6 +4276,10 @@ type NodeCatalogReport struct {
 	// What each service is doing now, for services the node reports a status
 	// for (agentiscale fork; field numbers from 1000 stay clear of upstream).
 	ServiceStatuses []*ServiceStatusReport `protobuf:"bytes,1000,rep,name=service_statuses,json=serviceStatuses,proto3" json:"service_statuses,omitempty"`
+	// Set when the node left its services' metadata out of this report to
+	// keep it within api.MaxCatalogReportBytes: their metadata is unknown
+	// here, not empty (agentiscale fork).
+	MetadataOmitted bool `protobuf:"varint,1001,opt,name=metadata_omitted,json=metadataOmitted,proto3" json:"metadata_omitted,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4322,6 +4326,13 @@ func (x *NodeCatalogReport) GetServiceStatuses() []*ServiceStatusReport {
 		return x.ServiceStatuses
 	}
 	return nil
+}
+
+func (x *NodeCatalogReport) GetMetadataOmitted() bool {
+	if x != nil {
+		return x.MetadataOmitted
+	}
+	return false
 }
 
 type TokenRevokeRequest struct {
@@ -5241,6 +5252,10 @@ type NodeServices struct {
 	ReportTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=report_time,json=reportTime,proto3" json:"report_time,omitempty"`
 	// From the node's last catalog report (agentiscale fork).
 	ServiceStatuses []*ServiceStatusReport `protobuf:"bytes,1000,rep,name=service_statuses,json=serviceStatuses,proto3" json:"service_statuses,omitempty"`
+	// The node's last catalog report left service metadata out to fit
+	// (NodeCatalogReport.metadata_omitted): the services' metadata is unknown,
+	// not empty (agentiscale fork).
+	MetadataOmitted bool `protobuf:"varint,1001,opt,name=metadata_omitted,json=metadataOmitted,proto3" json:"metadata_omitted,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -5294,6 +5309,13 @@ func (x *NodeServices) GetServiceStatuses() []*ServiceStatusReport {
 		return x.ServiceStatuses
 	}
 	return nil
+}
+
+func (x *NodeServices) GetMetadataOmitted() bool {
+	if x != nil {
+		return x.MetadataOmitted
+	}
+	return false
 }
 
 // AdminStatusResponse answers GET /admin/status: everything the console
@@ -6858,10 +6880,11 @@ const file_api_agentmesh_proto_rawDesc = "" +
 	"\rbiscuit_token\x18\x01 \x01(\fR\fbiscuitToken\x12;\n" +
 	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\x12#\n" +
-	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"\x99\x01\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"\xc5\x01\n" +
 	"\x11NodeCatalogReport\x125\n" +
 	"\bservices\x18\x01 \x03(\v2\x19.agentmesh.v1.ServiceInfoR\bservices\x12M\n" +
-	"\x10service_statuses\x18\xe8\a \x03(\v2!.agentmesh.v1.ServiceStatusReportR\x0fserviceStatuses\"-\n" +
+	"\x10service_statuses\x18\xe8\a \x03(\v2!.agentmesh.v1.ServiceStatusReportR\x0fserviceStatuses\x12*\n" +
+	"\x10metadata_omitted\x18\xe9\a \x01(\bR\x0fmetadataOmitted\"-\n" +
 	"\x12TokenRevokeRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"E\n" +
 	"\x13TokenRevokeResponse\x12\x18\n" +
@@ -6953,12 +6976,13 @@ const file_api_agentmesh_proto_rawDesc = "" +
 	"\x0fconnected_peers\x18\x05 \x03(\tR\x0econnectedPeers\x12\x19\n" +
 	"\bdht_size\x18\x06 \x01(\x05R\adhtSize\x12\x1f\n" +
 	"\vingress_url\x18\a \x01(\tR\n" +
-	"ingressUrl\"\xd1\x01\n" +
+	"ingressUrl\"\xfd\x01\n" +
 	"\fNodeServices\x125\n" +
 	"\bservices\x18\x01 \x03(\v2\x19.agentmesh.v1.ServiceInfoR\bservices\x12;\n" +
 	"\vreport_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"reportTime\x12M\n" +
-	"\x10service_statuses\x18\xe8\a \x03(\v2!.agentmesh.v1.ServiceStatusReportR\x0fserviceStatuses\"\xc6\x04\n" +
+	"\x10service_statuses\x18\xe8\a \x03(\v2!.agentmesh.v1.ServiceStatusReportR\x0fserviceStatuses\x12*\n" +
+	"\x10metadata_omitted\x18\xe9\a \x01(\bR\x0fmetadataOmitted\"\xc6\x04\n" +
 	"\x13AdminStatusResponse\x12(\n" +
 	"\x05users\x18\x01 \x03(\v2\x12.agentmesh.v1.UserR\x05users\x12@\n" +
 	"\x0eactive_routers\x18\x02 \x03(\v2\x19.agentmesh.v1.RouterLeaseR\ractiveRouters\x12A\n" +

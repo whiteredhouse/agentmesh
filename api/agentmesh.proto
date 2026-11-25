@@ -725,6 +725,10 @@ message NodeCatalogReport {
   // What each service is doing now, for services the node reports a status
   // for (agentiscale fork; field numbers from 1000 stay clear of upstream).
   repeated ServiceStatusReport service_statuses = 1000;
+  // Set when the node left its services' metadata out of this report to
+  // keep it within api.MaxCatalogReportBytes: their metadata is unknown
+  // here, not empty (agentiscale fork).
+  bool metadata_omitted = 1001;
 }
 
 message TokenRevokeRequest {
@@ -877,6 +881,10 @@ message NodeServices {
   google.protobuf.Timestamp report_time = 2;
   // From the node's last catalog report (agentiscale fork).
   repeated ServiceStatusReport service_statuses = 1000;
+  // The node's last catalog report left service metadata out to fit
+  // (NodeCatalogReport.metadata_omitted): the services' metadata is unknown,
+  // not empty (agentiscale fork).
+  bool metadata_omitted = 1001;
 }
 
 // AdminStatusResponse answers GET /admin/status: everything the console

@@ -192,6 +192,19 @@ func TestHandleNodeCatalog(t *testing.T) {
 	if len(got.GetServiceStatuses()) != 1 || !proto.Equal(got.GetServiceStatuses()[0], busy) {
 		t.Fatalf("node_catalog statuses = %v, want %v", got.GetServiceStatuses(), busy)
 	}
+	if got.GetMetadataOmitted() {
+		t.Fatal("node_catalog says metadata was left out of a report that kept it")
+	}
+
+	// A report that left metadata out to fit says so, and the console
+	// sees it until a report that kept metadata replaces it.
+	omitted := reportBody(t, &api.NodeCatalogReport{Services: []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner"}}, MetadataOmitted: true})
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, omitted); got != http.StatusNoContent {
+		t.Fatalf("report without metadata: got status %d, want %d", got, http.StatusNoContent)
+	}
+	if view := adminStatus(t, cpURL, srv.config.AdminToken).GetNodeCatalog(); !view[nodePeer.String()].GetMetadataOmitted() {
+		t.Fatalf("node_catalog lost metadata_omitted: %+v", view)
+	}
 
 	// An empty report is valid and clears the node's services.
 	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, catalogBody(t)); got != http.StatusNoContent {
