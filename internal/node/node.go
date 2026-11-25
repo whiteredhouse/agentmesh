@@ -2262,6 +2262,9 @@ func (n *AgentMeshNode) RegisterService(ctx context.Context, req *api.RegisterSe
 	if req.Backend == nil {
 		return fmt.Errorf("service backend is required")
 	}
+	// The node keeps its own copy: the caller may reuse its request for
+	// another registration as soon as this returns.
+	req = proto.Clone(req).(*api.RegisterServiceRequest)
 	svc, err := NewServiceFromRequest(req)
 	if err != nil {
 		return err
@@ -2988,7 +2991,9 @@ func (n *AgentMeshNode) reportNodeCatalog(ctx context.Context) error {
 	}
 
 	services := n.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)
-	if err := n.controlPlane(controlPlaneURL).ReportCatalogWithStatus(ctx, token, services, n.serviceStatuses(services)); err != nil {
+	statuses := n.serviceStatuses(services)
+	services = fitCatalogReport(services, statuses)
+	if err := n.controlPlane(controlPlaneURL).ReportCatalogWithStatus(ctx, token, services, statuses); err != nil {
 		return fmt.Errorf("failed to report node catalog: %w", err)
 	}
 	return nil

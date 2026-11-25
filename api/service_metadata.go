@@ -36,6 +36,12 @@ const (
 	MaxServiceMetadataBytes = 1024
 )
 
+// MaxCatalogReportBytes is the largest serialized NodeCatalogReport a node
+// sends: the control plane's request limit for POST /nodes/catalog. A node
+// whose report would be larger leaves service metadata out of it, so
+// metadata can never cost it its service and status updates.
+const MaxCatalogReportBytes = 1 << 20
+
 // ValidateServiceMetadata checks a service's metadata: at most
 // MaxServiceMetadataEntries keys, each a valid label key (1-63 chars of
 // [a-zA-Z0-9_.-], see ValidateLabelKey), and values of valid UTF-8 without

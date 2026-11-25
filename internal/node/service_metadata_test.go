@@ -18,13 +18,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/agentmesh/api"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/protobuf/proto"
 )
 
 func metadataOf(t *testing.T, r *ServiceRegistry, name string) map[string]string {
@@ -247,5 +252,144 @@ func TestServiceMetadataChangeReportsEarly(t *testing.T) {
 	noReport(t, reports, 500*time.Millisecond)
 	if err := node.SetServiceMetadata(api.ServiceType_SERVICE_TYPE_A2A, "calc", md); err == nil {
 		t.Fatal("metadata for a service of another type was accepted")
+	}
+}
+
+// A request reused for a second registration leaves the first intact: the
+// node copies it, and the registry looks services up by its own key.
+func TestRegisterServiceReusedRequest(t *testing.T) {
+	ctx := context.Background()
+	node, cleanup := startBareNode(t, ctx)
+	defer cleanup()
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, "{}")
+	}))
+	defer backend.Close()
+
+	req := &api.RegisterServiceRequest{
+		Service: &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "first", Metadata: map[string]string{"n": "1"}},
+		Backend: &api.RegisterServiceRequest_TargetUrl{TargetUrl: backend.URL},
+	}
+	if err := node.RegisterService(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	req.Service.Name = "second"
+	req.Service.Metadata["n"] = "2"
+	if err := node.RegisterService(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, info := range node.ListLocalServices(api.ServiceType_SERVICE_TYPE_A2A) {
+		got[info.GetName()] = info.GetMetadata()["n"]
+	}
+	if !maps.Equal(got, map[string]string{"first": "1", "second": "2"}) {
+		t.Fatalf("listed: %v", got)
+	}
+	if svc, ok := node.services.GetTyped(api.ServiceType_SERVICE_TYPE_A2A, "first"); !ok || svc.Info().GetName() != "first" {
+		t.Fatalf("first: %v %v", svc, ok)
+	}
+}
+
+// The same through the registry alone, for a Service whose Info() its
+// caller keeps changing: the registry answers by its own key and copy.
+func TestServiceRegistry_SharedInfoPointer(t *testing.T) {
+	r := newServiceRegistryForTest(&fakeDHT{})
+	info := &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "first"}
+	if err := r.Register(context.Background(), &fakeService{info: info}); err != nil {
+		t.Fatal(err)
+	}
+	info.Name = "second"
+	if err := r.Register(context.Background(), &fakeService{info: info}); err != nil {
+		t.Fatal(err)
+	}
+	info.Type = api.ServiceType_SERVICE_TYPE_MCP
+	var names []string
+	for _, i := range r.List(api.ServiceType_SERVICE_TYPE_A2A) {
+		names = append(names, i.GetName())
+	}
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"first", "second"}) {
+		t.Fatalf("listed: %v", names)
+	}
+	if _, ok := r.GetTyped(api.ServiceType_SERVICE_TYPE_A2A, "first"); !ok {
+		t.Fatal("GetTyped(first) missed the registry's own type")
+	}
+	if _, err := r.SetMetadata(api.ServiceType_SERVICE_TYPE_A2A, "first", map[string]string{"k": "v"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bigCatalog is the most services a report may carry, each with a 1 KiB
+// description and metadata at its limit: over the report limit with the
+// metadata, under it without.
+func bigCatalog() ([]*api.ServiceInfo, map[string]string) {
+	md := map[string]string{}
+	for i := range api.MaxServiceMetadataEntries {
+		md[fmt.Sprintf("k%02d", i)] = strings.Repeat("v", api.MaxServiceMetadataBytes/api.MaxServiceMetadataEntries-3)
+	}
+	var services []*api.ServiceInfo
+	for i := range 512 {
+		services = append(services, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: fmt.Sprintf("agent-%03d", i),
+			Description: strings.Repeat("d", 1024), Metadata: maps.Clone(md)})
+	}
+	return services, md
+}
+
+func TestFitCatalogReport(t *testing.T) {
+	services, md := bigCatalog()
+	if err := api.ValidateServiceMetadata(md); err != nil {
+		t.Fatal(err)
+	}
+	if size := proto.Size(&api.NodeCatalogReport{Services: services}); size <= api.MaxCatalogReportBytes {
+		t.Fatalf("test catalog is only %d bytes", size)
+	}
+	fitted := fitCatalogReport(services, nil)
+	if size := proto.Size(&api.NodeCatalogReport{Services: fitted}); size > api.MaxCatalogReportBytes {
+		t.Fatalf("fitted report is %d bytes", size)
+	}
+	for _, svc := range fitted {
+		if len(svc.GetMetadata()) != 0 || svc.GetDescription() == "" {
+			t.Fatalf("fitted service: %v", svc)
+		}
+	}
+
+	small := []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a", Metadata: maps.Clone(md)}}
+	if got := fitCatalogReport(small, nil); !maps.Equal(got[0].GetMetadata(), md) {
+		t.Fatalf("a report that fits lost its metadata: %v", got)
+	}
+}
+
+// The node's report leaves metadata out when it would not fit, and still
+// carries every service and status.
+func TestReportNodeCatalogLeavesOutMetadataThatDoesNotFit(t *testing.T) {
+	url, reports := catalogReports(t)
+	node := newCatalogTestNode(t, url)
+	node.SetIdentityCache([]byte("biscuit"))
+	services, _ := bigCatalog()
+	for _, info := range services {
+		node.services.insertService(&fakeService{info: info})
+	}
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_A2A, "agent-000", &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY}); err != nil {
+		t.Fatal(err)
+	}
+	if err := node.reportNodeCatalog(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	report := nextReport(t, reports, time.Second)
+	if len(report.GetServices()) != 513 || len(report.GetServiceStatuses()) != 1 {
+		t.Fatalf("report has %d services, %d statuses", len(report.GetServices()), len(report.GetServiceStatuses()))
+	}
+	if size := proto.Size(report); size > api.MaxCatalogReportBytes {
+		t.Fatalf("report is %d bytes", size)
+	}
+	for _, svc := range report.GetServices() {
+		if len(svc.GetMetadata()) != 0 {
+			t.Fatalf("metadata kept: %v", svc)
+		}
+	}
+	// list_local_services still has it.
+	if md := metadataOf(t, node.services, "agent-000"); len(md) == 0 {
+		t.Fatal("metadata gone from the registry")
 	}
 }
