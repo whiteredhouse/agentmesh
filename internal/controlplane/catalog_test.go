@@ -524,3 +524,11 @@ func reportBody(t *testing.T, report *api.NodeCatalogReport) []byte {
 	t.Helper()
 	return catalogBody(t, report.GetServices()...)
 }
+
+// A node fits its catalog report to api.MaxCatalogReportBytes, so the
+// control plane must take a report that large.
+func TestCatalogRequestLimitTakesAFittedReport(t *testing.T) {
+	if api.MaxCatalogReportBytes > maxRequestBodyBytes {
+		t.Fatalf("nodes fit reports to %d bytes, the control plane takes %d", api.MaxCatalogReportBytes, maxRequestBodyBytes)
+	}
+}
