@@ -140,7 +140,14 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, svc := range req.Services {
-		if svc == nil || svc.GetIngress() == nil {
+		if svc == nil {
+			continue
+		}
+		if err := api.ValidateServiceMetadata(svc.GetMetadata()); err != nil {
+			http.Error(w, "Invalid service metadata: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if svc.GetIngress() == nil {
 			continue
 		}
 		if err := api.ValidateServiceIngress(svc.GetType(), svc.GetIngress()); err != nil {

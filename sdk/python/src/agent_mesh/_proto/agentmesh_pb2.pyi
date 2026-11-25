@@ -296,16 +296,25 @@ class DirectoryWithdraw(_message.Message):
     def __init__(self, key: _Optional[bytes] = ..., provider: _Optional[str] = ...) -> None: ...
 
 class DiscoveredProvider(_message.Message):
-    __slots__ = ["local_proxy_url", "peer_id", "srv_description", "srv_name"]
+    __slots__ = ["local_proxy_url", "peer_id", "srv_description", "srv_metadata", "srv_name"]
+    class SrvMetadataEntry(_message.Message):
+        __slots__ = ["key", "value"]
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     LOCAL_PROXY_URL_FIELD_NUMBER: _ClassVar[int]
     PEER_ID_FIELD_NUMBER: _ClassVar[int]
     SRV_DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    SRV_METADATA_FIELD_NUMBER: _ClassVar[int]
     SRV_NAME_FIELD_NUMBER: _ClassVar[int]
     local_proxy_url: str
     peer_id: str
     srv_description: str
+    srv_metadata: _containers.ScalarMap[str, str]
     srv_name: str
-    def __init__(self, peer_id: _Optional[str] = ..., local_proxy_url: _Optional[str] = ..., srv_name: _Optional[str] = ..., srv_description: _Optional[str] = ...) -> None: ...
+    def __init__(self, peer_id: _Optional[str] = ..., local_proxy_url: _Optional[str] = ..., srv_name: _Optional[str] = ..., srv_description: _Optional[str] = ..., srv_metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class EgressAssignmentsRequest(_message.Message):
     __slots__ = []
@@ -883,16 +892,25 @@ class STSTokenResponse(_message.Message):
     def __init__(self, jwt: _Optional[str] = ..., expire_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., subject: _Optional[str] = ..., roles: _Optional[_Iterable[str]] = ..., task_name: _Optional[str] = ...) -> None: ...
 
 class ServiceInfo(_message.Message):
-    __slots__ = ["description", "ingress", "name", "type"]
+    __slots__ = ["description", "ingress", "metadata", "name", "type"]
+    class MetadataEntry(_message.Message):
+        __slots__ = ["key", "value"]
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
     INGRESS_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     TYPE_FIELD_NUMBER: _ClassVar[int]
     description: str
     ingress: ServiceIngress
+    metadata: _containers.ScalarMap[str, str]
     name: str
     type: ServiceType
-    def __init__(self, type: _Optional[_Union[ServiceType, str]] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., ingress: _Optional[_Union[ServiceIngress, _Mapping]] = ...) -> None: ...
+    def __init__(self, type: _Optional[_Union[ServiceType, str]] = ..., name: _Optional[str] = ..., description: _Optional[str] = ..., ingress: _Optional[_Union[ServiceIngress, _Mapping]] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class ServiceIngress(_message.Message):
     __slots__ = ["allow", "auth_mode"]

@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/google/agentmesh/api"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -117,6 +119,11 @@ type ExternalIngressGate interface {
 type ServiceRegistry struct {
 	mu       sync.RWMutex
 	services map[string]Service
+	// metadata is each registered service's current metadata, by name:
+	// seeded from ServiceInfo.metadata at Register and replaced by
+	// SetMetadata. List answers with it, so a service's own Info() never
+	// needs to change after registration.
+	metadata map[string]map[string]string
 	dht      directoryProvider
 
 	// reprovideNow asks the node to run a reprovide cycle now, so a service
@@ -145,6 +152,7 @@ func NewServiceRegistry(d directoryProvider, backendProbeTimeout time.Duration) 
 	}
 	return &ServiceRegistry{
 		services:            map[string]Service{},
+		metadata:            map[string]map[string]string{},
 		dht:                 d,
 		backendProbeTimeout: backendProbeTimeout,
 	}
@@ -176,6 +184,9 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 		return fmt.Errorf("invalid service name %q: %w", info.Name, err)
 	}
 	if err := api.ValidateServiceIngress(info.Type, info.GetIngress()); err != nil {
+		return fmt.Errorf("service %q: %w", info.Name, err)
+	}
+	if err := api.ValidateServiceMetadata(info.GetMetadata()); err != nil {
 		return fmt.Errorf("service %q: %w", info.Name, err)
 	}
 
@@ -220,6 +231,7 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	r.mu.Lock()
 	replaced := r.services[info.Name]
 	r.services[info.Name] = svc
+	r.setMetadataLocked(info.Name, info.GetMetadata())
 	r.mu.Unlock()
 
 	if replaced != nil && replaced != svc {
@@ -253,6 +265,7 @@ func (r *ServiceRegistry) Unregister(ctx context.Context, name string) error {
 	r.mu.Lock()
 	svc, ok := r.services[name]
 	delete(r.services, name)
+	delete(r.metadata, name)
 	typeStillServed := false
 	if ok {
 		for _, other := range r.services {
@@ -425,9 +438,51 @@ func (r *ServiceRegistry) List(typeFilter api.ServiceType) []*api.ServiceInfo {
 		if typeFilter != api.ServiceType_SERVICE_TYPE_UNSPECIFIED && info.Type != typeFilter {
 			continue
 		}
+		// The service's Info() is shared, so the current metadata goes
+		// on a copy.
+		md := r.metadata[info.Name]
+		if len(md) > 0 || len(info.GetMetadata()) > 0 {
+			info = proto.Clone(info).(*api.ServiceInfo)
+			info.Metadata = maps.Clone(md)
+		}
 		out = append(out, info)
 	}
 	return out
+}
+
+// SetMetadata replaces the metadata of the registered service of type
+// serviceType named name; nil or empty clears it. Discovery by type reads
+// each provider's live list_local_services answer, so other nodes see the
+// change on their next discovery; nothing is announced again. It reports
+// whether the metadata changed.
+func (r *ServiceRegistry) SetMetadata(serviceType api.ServiceType, name string, md map[string]string) (bool, error) {
+	if err := api.ValidateServiceMetadata(md); err != nil {
+		return false, fmt.Errorf("service %q: %w", name, err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	svc, ok := r.services[name]
+	if !ok || svc.Info().Type != serviceType {
+		return false, fmt.Errorf("no %s service %q is registered", serviceType, name)
+	}
+	if maps.Equal(r.metadata[name], md) {
+		return false, nil
+	}
+	r.setMetadataLocked(name, md)
+	return true, nil
+}
+
+// setMetadataLocked records a copy of md as name's metadata. r.mu must be
+// held for writing.
+func (r *ServiceRegistry) setMetadataLocked(name string, md map[string]string) {
+	if len(md) == 0 {
+		delete(r.metadata, name)
+		return
+	}
+	if r.metadata == nil {
+		r.metadata = map[string]map[string]string{}
+	}
+	r.metadata[name] = maps.Clone(md)
 }
 
 // insertService inserts a service into the registry without calling Init or
