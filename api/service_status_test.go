@@ -53,16 +53,17 @@ func TestValidateServiceStatus(t *testing.T) {
 // status.
 func TestValidateServiceStatusReports(t *testing.T) {
 	ok := &ServiceStatusReport{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{State: ServiceState_SERVICE_STATE_IDLE}}
-	stopped := &ServiceStatusReport{Type: ServiceType_SERVICE_TYPE_A2A, Name: "b", Status: &ServiceStatus{State: ServiceState_SERVICE_STATE_STOPPED}}
-	if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok, stopped}); err != nil {
+	paused := &ServiceStatusReport{Type: ServiceType_SERVICE_TYPE_A2A, Name: "b", Status: &ServiceStatus{State: ServiceState_SERVICE_STATE_BUSY, Paused: true, PausedSince: timestamppb.New(time.Now())}}
+	if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok, paused}); err != nil {
 		t.Fatal(err)
 	}
 	for name, r := range map[string]*ServiceStatusReport{
-		"nil":          nil,
-		"no name":      {Type: ServiceType_SERVICE_TYPE_A2A, Status: &ServiceStatus{}},
-		"no type":      {Name: "a", Status: &ServiceStatus{}},
-		"no status":    {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a"},
-		"invalid time": {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{Since: &timestamppb.Timestamp{Seconds: 253402300800}}},
+		"nil":                 nil,
+		"no name":             {Type: ServiceType_SERVICE_TYPE_A2A, Status: &ServiceStatus{}},
+		"no type":             {Name: "a", Status: &ServiceStatus{}},
+		"no status":           {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a"},
+		"invalid time":        {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{Since: &timestamppb.Timestamp{Seconds: 253402300800}}},
+		"invalid paused time": {Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{Paused: true, PausedSince: &timestamppb.Timestamp{Seconds: 253402300800}}},
 	} {
 		if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok, r}); err == nil {
 			t.Errorf("%s: accepted", name)

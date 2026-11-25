@@ -145,6 +145,14 @@ func TestServiceStatusChangeReportsEarly(t *testing.T) {
 	if got := nextReport(t, reports, 5*time.Second); len(got.GetServiceStatuses()) != 1 || got.GetServiceStatuses()[0].GetStatus().GetInputRequired() != 1 {
 		t.Fatalf("report after a task began waiting for input: %v", got)
 	}
+
+	busy.Paused, busy.PausedSince = true, timestamppb.Now()
+	if err := node.SetServiceStatus(api.ServiceType_SERVICE_TYPE_MCP, "calc", busy); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextReport(t, reports, 5*time.Second); len(got.GetServiceStatuses()) != 1 || !got.GetServiceStatuses()[0].GetStatus().GetPaused() {
+		t.Fatalf("report after the owner paused the service: %v", got)
+	}
 }
 
 // A status time JSON cannot render is refused at the node, as the control

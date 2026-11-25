@@ -33,6 +33,11 @@ func ValidateServiceStatus(st *ServiceStatus) error {
 			return fmt.Errorf("status input_required_since: %w", err)
 		}
 	}
+	if st.PausedSince != nil {
+		if err := st.PausedSince.CheckValid(); err != nil {
+			return fmt.Errorf("status paused_since: %w", err)
+		}
+	}
 	return nil
 }
 
