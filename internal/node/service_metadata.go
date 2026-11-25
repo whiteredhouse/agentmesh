@@ -20,17 +20,20 @@ import "github.com/google/agentmesh/api"
 // registered local service; nil or empty clears it. The node's
 // list_local_services answer carries it at once, so discovery by type on
 // other nodes sees it on their next lookup, and a change sends a catalog
-// report early, no sooner than CatalogReportMinGap after the last one.
+// report early, no sooner than CatalogReportMinGap after the last one
+// (as does a registration that changes it).
 // Agent Mesh never acts on metadata. Registering the service again resets
 // its metadata to what the registration carries.
 func (n *AgentMeshNode) SetServiceMetadata(serviceType api.ServiceType, name string, metadata map[string]string) error {
-	changed, err := n.services.SetMetadata(serviceType, name, metadata)
-	if err != nil || !changed {
-		return err
-	}
+	_, err := n.services.SetMetadata(serviceType, name, metadata)
+	return err
+}
+
+// catalogReportSoon asks the catalog loop for an early report, no sooner
+// than CatalogReportMinGap after the last one.
+func (n *AgentMeshNode) catalogReportSoon() {
 	select {
 	case n.catalogReportTrigger <- struct{}{}:
 	default:
 	}
-	return nil
 }

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
 package node
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"strings"
 	"testing"
@@ -97,8 +97,68 @@ func TestServiceRegistry_Metadata(t *testing.T) {
 	if err := r.Unregister(context.Background(), "agent"); err != nil {
 		t.Fatal(err)
 	}
-	if len(r.metadata) != 0 {
-		t.Fatalf("metadata kept after unregister: %v", r.metadata)
+	if len(r.infos) != 0 {
+		t.Fatalf("info kept after unregister: %v", r.infos)
+	}
+}
+
+// The registry answers from its own copy of the registration: a caller
+// reusing its ServiceInfo after Register returns changes nothing and
+// races with nothing (run with -race).
+func TestServiceRegistry_OwnsRegisteredInfo(t *testing.T) {
+	r := newServiceRegistryForTest(&fakeDHT{})
+	svc := newFakeSvc("agent", api.ServiceType_SERVICE_TYPE_A2A)
+	svc.info.Metadata = map[string]string{"team": "web"}
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := range 1000 {
+			svc.info.Metadata["team"] = fmt.Sprint(i)
+		}
+	}()
+	for range 1000 {
+		if got := metadataOf(t, r, "agent"); got["team"] != "web" {
+			t.Fatalf("listed the caller's map: %v", got)
+		}
+	}
+	<-done
+}
+
+// Registering again with other metadata asks for an early report, like
+// SetMetadata; registering with the same metadata does not.
+func TestServiceRegistry_MetadataChangeCallback(t *testing.T) {
+	r := newServiceRegistryForTest(&fakeDHT{})
+	calls := 0
+	r.onMetadataChange = func() { calls++ }
+	svc := newFakeSvc("agent", api.ServiceType_SERVICE_TYPE_A2A)
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("registering without metadata called back %d times", calls)
+	}
+	if _, err := r.SetMetadata(api.ServiceType_SERVICE_TYPE_A2A, "agent", map[string]string{"example.mark.drain": "{}"}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("SetMetadata: %d calls, want 1", calls)
+	}
+	// The registration carries no metadata, so registering again clears
+	// the drain mark: a change.
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("registering again over a mark: %d calls, want 2", calls)
+	}
+	if err := r.Register(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("registering again unchanged: %d calls, want 2", calls)
 	}
 }
 
@@ -166,6 +226,7 @@ func TestServiceMetadataChangeReportsEarly(t *testing.T) {
 	node := newCatalogTestNode(t, url)
 	node.SetIdentityCache([]byte("biscuit"))
 	node.catalogReportTrigger = make(chan struct{}, 1)
+	node.services.onMetadataChange = node.catalogReportSoon
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	node.startCatalogReportLoop(ctx, 10*time.Millisecond, 3*time.Second, 50*time.Millisecond)

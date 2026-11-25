@@ -20,6 +20,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -479,4 +480,75 @@ func TestCatalogPeerIDCanonicalization(t *testing.T) {
 	if snap := srv.catalogSnapshot(); len(snap) != 0 {
 		t.Fatalf("banning a CIDv1-enrolled node must evict its cached report, got %v", snap)
 	}
+}
+
+// fullMetadata is metadata at every bound at once, with the most encoding
+// overhead: as many keys as allowed, values long enough for two-byte
+// lengths, MaxServiceMetadataBytes in all.
+func fullMetadata(t *testing.T) map[string]string {
+	t.Helper()
+	md := map[string]string{}
+	left := api.MaxServiceMetadataBytes
+	for i := range api.MaxServiceMetadataEntries {
+		key := strconv.Itoa(i)
+		size := (api.MaxServiceMetadataBytes / api.MaxServiceMetadataEntries) - len(key)
+		if i == api.MaxServiceMetadataEntries-1 {
+			size = left - len(key)
+		}
+		md[key] = string(bytes.Repeat([]byte("x"), size))
+		left -= len(key) + size
+	}
+	if err := api.ValidateServiceMetadata(md); err != nil || left != 0 {
+		t.Fatalf("not metadata at its limit: %v, %d bytes left", err, left)
+	}
+	return md
+}
+
+// A report of the most services a report may carry, each with metadata at
+// its limit, an ordinary name and description and a status, fits the
+// request limit with room to spare, and the control plane takes it.
+func TestHandleNodeCatalog_FullMetadataFits(t *testing.T) {
+	t.Parallel()
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	priv, biscuitBytes := enrollRefreshTestNode(t, context.Background(), store)
+
+	md := fullMetadata(t)
+	now := timestamppb.Now()
+	report := &api.NodeCatalogReport{}
+	for i := range maxCatalogServices {
+		name := fmt.Sprintf("agent-%026d", i)
+		report.Services = append(report.Services, &api.ServiceInfo{
+			Type: api.ServiceType_SERVICE_TYPE_A2A, Name: name,
+			Description: string(bytes.Repeat([]byte("d"), 128)),
+			Metadata:    md,
+		})
+		report.ServiceStatuses = append(report.ServiceStatuses, &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: name,
+			Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: now, InputRequired: 1, InputRequiredSince: now}})
+	}
+	body := reportBody(t, report)
+	// Metadata may take at most 60% of the limit; the rest is for what a
+	// report carried before it.
+	metadataBytes := len(body) - len(reportBody(t, withoutMetadata(report)))
+	if limit := maxRequestBodyBytes * 6 / 10; metadataBytes > limit {
+		t.Fatalf("metadata at its limit takes %d bytes of the report, want at most %d", metadataBytes, limit)
+	}
+	if len(body) > maxRequestBodyBytes*3/4 {
+		t.Fatalf("report is %d bytes, want at most %d", len(body), maxRequestBodyBytes*3/4)
+	}
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, body); got != http.StatusNoContent {
+		t.Fatalf("got status %d, want %d", got, http.StatusNoContent)
+	}
+}
+
+func withoutMetadata(report *api.NodeCatalogReport) *api.NodeCatalogReport {
+	out := proto.Clone(report).(*api.NodeCatalogReport)
+	for _, svc := range out.Services {
+		svc.Metadata = nil
+	}
+	return out
 }

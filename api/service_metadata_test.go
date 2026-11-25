@@ -26,7 +26,7 @@ func TestValidateServiceMetadata(t *testing.T) {
 		tooMany[fmt.Sprintf("k%d", i)] = "v"
 	}
 	tooBig := map[string]string{}
-	for i := range 9 {
+	for i := range 3 {
 		tooBig[fmt.Sprintf("k%d", i)] = strings.Repeat("x", MaxServiceMetadataValueLen)
 	}
 	tests := []struct {

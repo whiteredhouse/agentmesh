@@ -119,12 +119,18 @@ type ExternalIngressGate interface {
 type ServiceRegistry struct {
 	mu       sync.RWMutex
 	services map[string]Service
-	// metadata is each registered service's current metadata, by name:
-	// seeded from ServiceInfo.metadata at Register and replaced by
-	// SetMetadata. List answers with it, so a service's own Info() never
-	// needs to change after registration.
-	metadata map[string]map[string]string
-	dht      directoryProvider
+	// infos is the registry's own copy of each registered service's
+	// ServiceInfo, by name, taken at Register so that a caller reusing the
+	// request it registered with never races with List. SetMetadata
+	// replaces an entry with a new copy (never changes one in place), and
+	// List answers with copies of them.
+	infos map[string]*api.ServiceInfo
+
+	// onMetadataChange, if set, is called (without r.mu held) after
+	// Register or SetMetadata changed a service's metadata. The node asks
+	// for an early catalog report with it.
+	onMetadataChange func()
+	dht              directoryProvider
 
 	// reprovideNow asks the node to run a reprovide cycle now, so a service
 	// registered after the loop last ran does not wait a whole interval to be
@@ -152,7 +158,7 @@ func NewServiceRegistry(d directoryProvider, backendProbeTimeout time.Duration) 
 	}
 	return &ServiceRegistry{
 		services:            map[string]Service{},
-		metadata:            map[string]map[string]string{},
+		infos:               map[string]*api.ServiceInfo{},
 		dht:                 d,
 		backendProbeTimeout: backendProbeTimeout,
 	}
@@ -189,6 +195,9 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	if err := api.ValidateServiceMetadata(info.GetMetadata()); err != nil {
 		return fmt.Errorf("service %q: %w", info.Name, err)
 	}
+	// The registry's own copy, taken before the call returns: the caller
+	// may reuse its request afterwards.
+	owned := proto.Clone(info).(*api.ServiceInfo)
 
 	// Policy is evaluated on type://name and the registry is keyed on name,
 	// so a second type under the same name would let a grant for one reach
@@ -231,8 +240,12 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	r.mu.Lock()
 	replaced := r.services[info.Name]
 	r.services[info.Name] = svc
-	r.setMetadataLocked(info.Name, info.GetMetadata())
+	metadataChanged := !maps.Equal(r.infos[info.Name].GetMetadata(), owned.GetMetadata())
+	r.setInfoLocked(owned)
 	r.mu.Unlock()
+	if metadataChanged && r.onMetadataChange != nil {
+		r.onMetadataChange()
+	}
 
 	if replaced != nil && replaced != svc {
 		if err := replaced.Teardown(); err != nil {
@@ -265,7 +278,7 @@ func (r *ServiceRegistry) Unregister(ctx context.Context, name string) error {
 	r.mu.Lock()
 	svc, ok := r.services[name]
 	delete(r.services, name)
-	delete(r.metadata, name)
+	delete(r.infos, name)
 	typeStillServed := false
 	if ok {
 		for _, other := range r.services {
@@ -434,18 +447,15 @@ func (r *ServiceRegistry) List(typeFilter api.ServiceType) []*api.ServiceInfo {
 	defer r.mu.RUnlock()
 	out := []*api.ServiceInfo{}
 	for _, svc := range r.services {
-		info := svc.Info()
+		info, ok := r.infos[svc.Info().GetName()]
+		if !ok {
+			// Only insertService (tests) skips the copy.
+			info = svc.Info()
+		}
 		if typeFilter != api.ServiceType_SERVICE_TYPE_UNSPECIFIED && info.Type != typeFilter {
 			continue
 		}
-		// The service's Info() is shared, so the current metadata goes
-		// on a copy.
-		md := r.metadata[info.Name]
-		if len(md) > 0 || len(info.GetMetadata()) > 0 {
-			info = proto.Clone(info).(*api.ServiceInfo)
-			info.Metadata = maps.Clone(md)
-		}
-		out = append(out, info)
+		out = append(out, proto.Clone(info).(*api.ServiceInfo))
 	}
 	return out
 }
@@ -460,29 +470,39 @@ func (r *ServiceRegistry) SetMetadata(serviceType api.ServiceType, name string, 
 		return false, fmt.Errorf("service %q: %w", name, err)
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	svc, ok := r.services[name]
 	if !ok || svc.Info().Type != serviceType {
+		r.mu.Unlock()
 		return false, fmt.Errorf("no %s service %q is registered", serviceType, name)
 	}
-	if maps.Equal(r.metadata[name], md) {
+	cur, ok := r.infos[name]
+	if !ok {
+		cur = svc.Info()
+	}
+	if maps.Equal(cur.GetMetadata(), md) {
+		r.mu.Unlock()
 		return false, nil
 	}
-	r.setMetadataLocked(name, md)
+	next := proto.Clone(cur).(*api.ServiceInfo)
+	next.Metadata = nil
+	if len(md) > 0 {
+		next.Metadata = maps.Clone(md)
+	}
+	r.setInfoLocked(next)
+	r.mu.Unlock()
+	if r.onMetadataChange != nil {
+		r.onMetadataChange()
+	}
 	return true, nil
 }
 
-// setMetadataLocked records a copy of md as name's metadata. r.mu must be
-// held for writing.
-func (r *ServiceRegistry) setMetadataLocked(name string, md map[string]string) {
-	if len(md) == 0 {
-		delete(r.metadata, name)
-		return
+// setInfoLocked records info, which the registry owns from now on, as the
+// registered service's ServiceInfo. r.mu must be held for writing.
+func (r *ServiceRegistry) setInfoLocked(info *api.ServiceInfo) {
+	if r.infos == nil {
+		r.infos = map[string]*api.ServiceInfo{}
 	}
-	if r.metadata == nil {
-		r.metadata = map[string]map[string]string{}
-	}
-	r.metadata[name] = maps.Clone(md)
+	r.infos[info.GetName()] = info
 }
 
 // insertService inserts a service into the registry without calling Init or

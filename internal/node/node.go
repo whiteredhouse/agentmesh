@@ -815,6 +815,7 @@ func (n *AgentMeshNode) Start(ctx context.Context) error {
 
 	n.services = NewServiceRegistry(n.Directory, n.config.BackendProbeTimeout)
 	n.services.reprovideNow = n.triggerReprovide
+	n.services.onMetadataChange = n.catalogReportSoon
 	n.services.onIngressRegistered = n.logIngressURLs
 	n.applyPendingEgress(ctx)
 
