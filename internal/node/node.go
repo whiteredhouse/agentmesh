@@ -2465,6 +2465,7 @@ func (n *AgentMeshNode) DiscoverRemoteServicesStream(ctx context.Context, servic
 						LocalProxyUrl:  n.localProxyURL(peerID, typeStr, info.Name),
 						SrvName:        info.Name,
 						SrvDescription: info.Description,
+						SrvMetadata:    info.GetMetadata(),
 					}
 					select {
 					case <-fanoutCtx.Done():
@@ -2557,6 +2558,7 @@ func (n *AgentMeshNode) discoverServicesByType(ctx context.Context, serviceType 
 				LocalProxyUrl:  n.localProxyURL(r.peerID, typeStr, info.Name),
 				SrvName:        info.Name,
 				SrvDescription: info.Description,
+				SrvMetadata:    info.GetMetadata(),
 			})
 		}
 	}

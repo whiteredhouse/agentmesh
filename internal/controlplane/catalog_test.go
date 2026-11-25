@@ -262,6 +262,8 @@ func TestHandleNodeCatalog_Rejections(t *testing.T) {
 		{name: "missing challenge", auth: bearer(biscuitBytes), body: ok, want: http.StatusUnauthorized},
 		{name: "invalid body", auth: bearer(biscuitBytes), priv: priv, body: []byte(`{"services":[]}`), want: http.StatusBadRequest},
 		{name: "too many services", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, tooMany...), want: http.StatusBadRequest},
+		{name: "invalid service metadata", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
+			Metadata: map[string]string{"bad key": "x"}}), want: http.StatusBadRequest},
 		// A status time JSON cannot render would break /admin/status.
 		{name: "status since out of range", auth: bearer(biscuitBytes), priv: priv, body: statusBody(t, &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
 			Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: &timestamppb.Timestamp{Seconds: 253402300800}}}), want: http.StatusBadRequest},
