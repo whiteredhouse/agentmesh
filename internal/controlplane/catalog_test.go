@@ -169,6 +169,19 @@ func TestHandleNodeCatalog(t *testing.T) {
 	if len(got.GetServices()) != 1 || !proto.Equal(got.GetServices()[0], want) || got.GetReportTime() == nil {
 		t.Fatalf("node_catalog view = %+v, want services %+v", got, want)
 	}
+	if got.GetMetadataOmitted() {
+		t.Fatal("node_catalog says metadata was left out of a report that kept it")
+	}
+
+	// A report that left metadata out to fit says so, and the console
+	// sees it until a report that kept metadata replaces it.
+	omitted := reportBody(t, &api.NodeCatalogReport{Services: []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "planner"}}, MetadataOmitted: true})
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, omitted); got != http.StatusNoContent {
+		t.Fatalf("report without metadata: got status %d, want %d", got, http.StatusNoContent)
+	}
+	if view := adminStatus(t, cpURL, srv.config.AdminToken).GetNodeCatalog(); !view[nodePeer.String()].GetMetadataOmitted() {
+		t.Fatalf("node_catalog lost metadata_omitted: %+v", view)
+	}
 
 	// An empty report is valid and clears the node's services.
 	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, catalogBody(t)); got != http.StatusNoContent {
@@ -522,7 +535,11 @@ func withoutMetadata(report *api.NodeCatalogReport) *api.NodeCatalogReport {
 
 func reportBody(t *testing.T, report *api.NodeCatalogReport) []byte {
 	t.Helper()
-	return catalogBody(t, report.GetServices()...)
+	body, err := proto.Marshal(report)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	return body
 }
 
 // A node fits its catalog report to api.MaxCatalogReportBytes, so the

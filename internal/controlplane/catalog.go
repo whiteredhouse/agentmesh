@@ -33,8 +33,10 @@ const maxCatalogServices = 512
 
 // nodeCatalogEntry is what HandleNodeCatalog caches per reporting peer.
 type nodeCatalogEntry struct {
-	Services   []*api.ServiceInfo
-	ReportedAt time.Time
+	Services []*api.ServiceInfo
+	// MetadataOmitted: the report left service metadata out to fit.
+	MetadataOmitted bool
+	ReportedAt      time.Time
 }
 
 // catalogSnapshot returns a stable copy of the current node service catalog
@@ -76,7 +78,7 @@ func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map
 			}
 			services = append(services, svc)
 		}
-		view[node.PeerID] = &api.NodeServices{Services: services, ReportTime: timestamppb.New(entry.ReportedAt)}
+		view[node.PeerID] = &api.NodeServices{Services: services, MetadataOmitted: entry.MetadataOmitted, ReportTime: timestamppb.New(entry.ReportedAt)}
 	}
 	return view
 }
@@ -158,8 +160,9 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 
 	s.catalogMu.Lock()
 	s.catalog[nodeRecord.PeerID] = nodeCatalogEntry{
-		Services:   req.Services,
-		ReportedAt: time.Now(),
+		Services:        req.Services,
+		MetadataOmitted: req.GetMetadataOmitted(),
+		ReportedAt:      time.Now(),
 	}
 	catalogEntries.Set(float64(len(s.catalog)))
 	s.catalogMu.Unlock()

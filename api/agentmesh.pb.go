@@ -4080,10 +4080,14 @@ func (x *TokenRefreshResponse) GetErrorMessage() string {
 // taken from the presented biscuit, never from the body, so a node can only
 // ever describe itself. Display-only; carries no authorization weight.
 type NodeCatalogReport struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Services      []*ServiceInfo         `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Services []*ServiceInfo         `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
+	// Set when the node left its services' metadata out of this report to
+	// keep it within api.MaxCatalogReportBytes: their metadata is unknown
+	// here, not empty.
+	MetadataOmitted bool `protobuf:"varint,2,opt,name=metadata_omitted,json=metadataOmitted,proto3" json:"metadata_omitted,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *NodeCatalogReport) Reset() {
@@ -4121,6 +4125,13 @@ func (x *NodeCatalogReport) GetServices() []*ServiceInfo {
 		return x.Services
 	}
 	return nil
+}
+
+func (x *NodeCatalogReport) GetMetadataOmitted() bool {
+	if x != nil {
+		return x.MetadataOmitted
+	}
+	return false
 }
 
 type TokenRevokeRequest struct {
@@ -5035,11 +5046,15 @@ func (x *RouterLease) GetIngressUrl() string {
 // NodeServices is the services one node last reported (see
 // NodeCatalogReport).
 type NodeServices struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Services      []*ServiceInfo         `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
-	ReportTime    *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=report_time,json=reportTime,proto3" json:"report_time,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Services   []*ServiceInfo         `protobuf:"bytes,1,rep,name=services,proto3" json:"services,omitempty"`
+	ReportTime *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=report_time,json=reportTime,proto3" json:"report_time,omitempty"`
+	// The node's last catalog report left service metadata out to fit
+	// (NodeCatalogReport.metadata_omitted): the services' metadata is
+	// unknown, not empty.
+	MetadataOmitted bool `protobuf:"varint,3,opt,name=metadata_omitted,json=metadataOmitted,proto3" json:"metadata_omitted,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *NodeServices) Reset() {
@@ -5084,6 +5099,13 @@ func (x *NodeServices) GetReportTime() *timestamppb.Timestamp {
 		return x.ReportTime
 	}
 	return nil
+}
+
+func (x *NodeServices) GetMetadataOmitted() bool {
+	if x != nil {
+		return x.MetadataOmitted
+	}
+	return false
 }
 
 // AdminStatusResponse answers GET /admin/status: everything the console
@@ -6639,9 +6661,10 @@ const file_api_agentmesh_proto_rawDesc = "" +
 	"\rbiscuit_token\x18\x01 \x01(\fR\fbiscuitToken\x12;\n" +
 	"\vexpire_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"expireTime\x12#\n" +
-	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"J\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"u\n" +
 	"\x11NodeCatalogReport\x125\n" +
-	"\bservices\x18\x01 \x03(\v2\x19.agentmesh.v1.ServiceInfoR\bservices\"-\n" +
+	"\bservices\x18\x01 \x03(\v2\x19.agentmesh.v1.ServiceInfoR\bservices\x12)\n" +
+	"\x10metadata_omitted\x18\x02 \x01(\bR\x0fmetadataOmitted\"-\n" +
 	"\x12TokenRevokeRequest\x12\x17\n" +
 	"\apeer_id\x18\x01 \x01(\tR\x06peerId\"E\n" +
 	"\x13TokenRevokeResponse\x12\x18\n" +
@@ -6733,11 +6756,12 @@ const file_api_agentmesh_proto_rawDesc = "" +
 	"\x0fconnected_peers\x18\x05 \x03(\tR\x0econnectedPeers\x12\x19\n" +
 	"\bdht_size\x18\x06 \x01(\x05R\adhtSize\x12\x1f\n" +
 	"\vingress_url\x18\a \x01(\tR\n" +
-	"ingressUrl\"\x82\x01\n" +
+	"ingressUrl\"\xad\x01\n" +
 	"\fNodeServices\x125\n" +
 	"\bservices\x18\x01 \x03(\v2\x19.agentmesh.v1.ServiceInfoR\bservices\x12;\n" +
 	"\vreport_time\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"reportTime\"\xc6\x04\n" +
+	"reportTime\x12)\n" +
+	"\x10metadata_omitted\x18\x03 \x01(\bR\x0fmetadataOmitted\"\xc6\x04\n" +
 	"\x13AdminStatusResponse\x12(\n" +
 	"\x05users\x18\x01 \x03(\v2\x12.agentmesh.v1.UserR\x05users\x12@\n" +
 	"\x0eactive_routers\x18\x02 \x03(\v2\x19.agentmesh.v1.RouterLeaseR\ractiveRouters\x12A\n" +

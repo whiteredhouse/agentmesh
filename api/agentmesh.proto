@@ -689,6 +689,10 @@ message TokenRefreshResponse {
 // ever describe itself. Display-only; carries no authorization weight.
 message NodeCatalogReport {
   repeated ServiceInfo services = 1;
+  // Set when the node left its services' metadata out of this report to
+  // keep it within api.MaxCatalogReportBytes: their metadata is unknown
+  // here, not empty.
+  bool metadata_omitted = 2;
 }
 
 message TokenRevokeRequest {
@@ -839,6 +843,10 @@ message RouterLease {
 message NodeServices {
   repeated ServiceInfo services = 1;
   google.protobuf.Timestamp report_time = 2;
+  // The node's last catalog report left service metadata out to fit
+  // (NodeCatalogReport.metadata_omitted): the services' metadata is
+  // unknown, not empty.
+  bool metadata_omitted = 3;
 }
 
 // AdminStatusResponse answers GET /admin/status: everything the console

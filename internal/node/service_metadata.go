@@ -31,23 +31,27 @@ func (n *AgentMeshNode) SetServiceMetadata(serviceType api.ServiceType, name str
 }
 
 // fitCatalogReport leaves service metadata out of a catalog report that
-// would otherwise exceed api.MaxCatalogReportBytes, so metadata can never
-// make the control plane refuse a report and keep serving stale services. Metadata is the only part a node can drop without saying
-// something false; list_local_services still answers with it. services
-// are copies (ListLocalServices), so they are changed in place.
-func fitCatalogReport(services []*api.ServiceInfo) []*api.ServiceInfo {
-	if proto.Size(&api.NodeCatalogReport{Services: services}) <= api.MaxCatalogReportBytes {
-		return services
+// would otherwise exceed api.MaxCatalogReportBytes, and says so with
+// metadata_omitted, so metadata can never make the control plane refuse a
+// report and keep serving stale services, and a console can
+// tell metadata left out from metadata cleared. Metadata is the only part
+// a node can drop without saying something false; list_local_services
+// still answers with it. The report's services are copies
+// (ListLocalServices), so they are changed in place.
+func fitCatalogReport(report *api.NodeCatalogReport) *api.NodeCatalogReport {
+	if proto.Size(report) <= api.MaxCatalogReportBytes {
+		return report
 	}
 	dropped := 0
-	for _, svc := range services {
+	for _, svc := range report.GetServices() {
 		if len(svc.GetMetadata()) > 0 {
 			svc.Metadata = nil
 			dropped++
 		}
 	}
 	if dropped > 0 {
+		report.MetadataOmitted = true
 		logger.Warnf("[Catalog] Report over %d bytes; leaving out the metadata of %d services", api.MaxCatalogReportBytes, dropped)
 	}
-	return services
+	return report
 }

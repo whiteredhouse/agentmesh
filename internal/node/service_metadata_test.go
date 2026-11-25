@@ -304,19 +304,31 @@ func TestFitCatalogReport(t *testing.T) {
 	if size := proto.Size(&api.NodeCatalogReport{Services: services}); size <= api.MaxCatalogReportBytes {
 		t.Fatalf("test catalog is only %d bytes", size)
 	}
-	fitted := fitCatalogReport(services)
-	if size := proto.Size(&api.NodeCatalogReport{Services: fitted}); size > api.MaxCatalogReportBytes {
+	fitted := fitCatalogReport(&api.NodeCatalogReport{Services: services})
+	if size := proto.Size(fitted); size > api.MaxCatalogReportBytes {
 		t.Fatalf("fitted report is %d bytes", size)
 	}
-	for _, svc := range fitted {
+	if !fitted.GetMetadataOmitted() {
+		t.Fatal("fitted report does not say metadata was left out")
+	}
+	for _, svc := range fitted.GetServices() {
 		if len(svc.GetMetadata()) != 0 || svc.GetDescription() == "" {
 			t.Fatalf("fitted service: %v", svc)
 		}
 	}
 
-	small := []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a", Metadata: maps.Clone(md)}}
-	if got := fitCatalogReport(small); !maps.Equal(got[0].GetMetadata(), md) {
-		t.Fatalf("a report that fits lost its metadata: %v", got)
+	small := &api.NodeCatalogReport{Services: []*api.ServiceInfo{{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a", Metadata: maps.Clone(md)}}}
+	if got := fitCatalogReport(small); !maps.Equal(got.GetServices()[0].GetMetadata(), md) || got.GetMetadataOmitted() {
+		t.Fatalf("a report that fits changed: %v", got)
+	}
+
+	// Too large without any metadata to leave out: nothing was omitted.
+	bare := &api.NodeCatalogReport{}
+	for _, svc := range services {
+		bare.Services = append(bare.Services, &api.ServiceInfo{Type: svc.GetType(), Name: svc.GetName(), Description: strings.Repeat("d", 4096)})
+	}
+	if got := fitCatalogReport(bare); got.GetMetadataOmitted() {
+		t.Fatal("a report with no metadata says metadata was left out")
 	}
 }
 
@@ -344,8 +356,8 @@ func TestReportNodeCatalogLeavesOutMetadataThatDoesNotFit(t *testing.T) {
 		t.Fatal(err)
 	}
 	report := <-reports
-	if len(report.GetServices()) != 513 {
-		t.Fatalf("report has %d services", len(report.GetServices()))
+	if len(report.GetServices()) != 513 || !report.GetMetadataOmitted() {
+		t.Fatalf("report has %d services, metadata_omitted %v", len(report.GetServices()), report.GetMetadataOmitted())
 	}
 	if size := proto.Size(report); size > api.MaxCatalogReportBytes {
 		t.Fatalf("report is %d bytes", size)
