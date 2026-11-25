@@ -53,7 +53,8 @@ func TestValidateServiceStatus(t *testing.T) {
 // status.
 func TestValidateServiceStatusReports(t *testing.T) {
 	ok := &ServiceStatusReport{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Status: &ServiceStatus{State: ServiceState_SERVICE_STATE_IDLE}}
-	if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok}); err != nil {
+	stopped := &ServiceStatusReport{Type: ServiceType_SERVICE_TYPE_A2A, Name: "b", Status: &ServiceStatus{State: ServiceState_SERVICE_STATE_STOPPED}}
+	if err := ValidateServiceStatusReports([]*ServiceStatusReport{ok, stopped}); err != nil {
 		t.Fatal(err)
 	}
 	for name, r := range map[string]*ServiceStatusReport{

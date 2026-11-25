@@ -183,13 +183,16 @@ message ServiceInfo {
   ServiceIngress ingress = 4;
 }
 
-// ServiceState is whether a service is working on a request.
+// ServiceState is whether a service is working on a request, or takes none.
 enum ServiceState {
   SERVICE_STATE_UNSPECIFIED = 0;
   // Ready for work.
   SERVICE_STATE_IDLE = 1;
   // Working on a request.
   SERVICE_STATE_BUSY = 2;
+  // Registered but refusing new requests until its owner resumes it
+  // (agentiscale fork).
+  SERVICE_STATE_STOPPED = 3;
 }
 
 // ServiceStatus is a coarse, content-free status of a service: never what a

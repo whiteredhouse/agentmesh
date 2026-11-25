@@ -201,7 +201,7 @@ func (IngressAuthMode) EnumDescriptor() ([]byte, []int) {
 	return file_api_agentmesh_proto_rawDescGZIP(), []int{2}
 }
 
-// ServiceState is whether a service is working on a request.
+// ServiceState is whether a service is working on a request, or takes none.
 type ServiceState int32
 
 const (
@@ -210,6 +210,9 @@ const (
 	ServiceState_SERVICE_STATE_IDLE ServiceState = 1
 	// Working on a request.
 	ServiceState_SERVICE_STATE_BUSY ServiceState = 2
+	// Registered but refusing new requests until its owner resumes it
+	// (agentiscale fork).
+	ServiceState_SERVICE_STATE_STOPPED ServiceState = 3
 )
 
 // Enum value maps for ServiceState.
@@ -218,11 +221,13 @@ var (
 		0: "SERVICE_STATE_UNSPECIFIED",
 		1: "SERVICE_STATE_IDLE",
 		2: "SERVICE_STATE_BUSY",
+		3: "SERVICE_STATE_STOPPED",
 	}
 	ServiceState_value = map[string]int32{
 		"SERVICE_STATE_UNSPECIFIED": 0,
 		"SERVICE_STATE_IDLE":        1,
 		"SERVICE_STATE_BUSY":        2,
+		"SERVICE_STATE_STOPPED":     3,
 	}
 )
 
@@ -7042,11 +7047,12 @@ const file_api_agentmesh_proto_rawDesc = "" +
 	"\x0fIngressAuthMode\x12!\n" +
 	"\x1dINGRESS_AUTH_MODE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16INGRESS_AUTH_MODE_EDGE\x10\x01\x12!\n" +
-	"\x1dINGRESS_AUTH_MODE_PASSTHROUGH\x10\x02*]\n" +
+	"\x1dINGRESS_AUTH_MODE_PASSTHROUGH\x10\x02*x\n" +
 	"\fServiceState\x12\x1d\n" +
 	"\x19SERVICE_STATE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12SERVICE_STATE_IDLE\x10\x01\x12\x16\n" +
-	"\x12SERVICE_STATE_BUSY\x10\x02*7\n" +
+	"\x12SERVICE_STATE_BUSY\x10\x02\x12\x19\n" +
+	"\x15SERVICE_STATE_STOPPED\x10\x03*7\n" +
 	"\n" +
 	"EgressMode\x12\x14\n" +
 	"\x10EGRESS_MODE_HTTP\x10\x00\x12\x13\n" +
