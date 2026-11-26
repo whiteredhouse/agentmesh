@@ -279,3 +279,30 @@ func TestServiceRegistry_SharedInfoPointer(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Discovery hands on only metadata a node could have set: a remote peer's
+// invalid metadata is dropped, its service stays listed, and null entries
+// are skipped.
+func TestCheckRemoteCatalog(t *testing.T) {
+	tooMany := map[string]string{}
+	for i := range api.MaxServiceMetadataEntries + 1 {
+		tooMany[fmt.Sprintf("k%d", i)] = "v"
+	}
+	got := checkRemoteCatalog("peer", []*api.ServiceInfo{
+		{Name: "good", Metadata: map[string]string{"example.mark.drain": "reboot"}},
+		nil,
+		{Name: "bad", Metadata: tooMany},
+		{Name: "badkey", Metadata: map[string]string{"bad key": "v"}},
+	})
+	if len(got) != 3 {
+		t.Fatalf("got %d services, want 3", len(got))
+	}
+	if got[0].GetMetadata()["example.mark.drain"] != "reboot" {
+		t.Fatalf("valid metadata lost: %v", got[0].GetMetadata())
+	}
+	for _, svc := range got[1:] {
+		if svc.GetMetadata() != nil {
+			t.Fatalf("%s kept invalid metadata", svc.GetName())
+		}
+	}
+}

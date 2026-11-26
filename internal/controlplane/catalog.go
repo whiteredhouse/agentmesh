@@ -138,12 +138,14 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
-	if api.CatalogReportBaseSize(&req) > api.MaxCatalogReportBytes {
-		http.Error(w, fmt.Sprintf("Report too large: more than %d bytes besides service metadata", api.MaxCatalogReportBytes), http.StatusBadRequest)
-		return
-	}
+	// Count first: the metadata room is sized for this many services, and
+	// measuring the base size copies the report.
 	if len(req.Services) > maxCatalogServices {
 		http.Error(w, fmt.Sprintf("Too many services in report (max %d)", maxCatalogServices), http.StatusBadRequest)
+		return
+	}
+	if api.CatalogReportBaseSize(&req) > api.MaxCatalogReportBytes {
+		http.Error(w, fmt.Sprintf("Report too large: more than %d bytes besides service metadata", api.MaxCatalogReportBytes), http.StatusBadRequest)
 		return
 	}
 	for _, svc := range req.Services {

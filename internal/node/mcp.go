@@ -436,7 +436,26 @@ func (n *AgentMeshNode) fetchRemoteServiceCatalog(ctx context.Context, peerID pe
 		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text.Text))
 		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
-	return services, nil
+	return checkRemoteCatalog(peerID, services), nil
+}
+
+// checkRemoteCatalog drops what a remote peer's catalog should never hold:
+// null entries, and metadata that ValidateServiceMetadata refuses (the
+// service stays listed without it). Discovery only hands on metadata within
+// the bounds a node enforces when it is set.
+func checkRemoteCatalog(peerID peer.ID, services []*api.ServiceInfo) []*api.ServiceInfo {
+	out := services[:0]
+	for _, svc := range services {
+		if svc == nil {
+			continue
+		}
+		if err := api.ValidateServiceMetadata(svc.GetMetadata()); err != nil {
+			logger.Warnf("[Discovery] dropping metadata of %s from %s: %v", svc.GetName(), peerID, err)
+			svc.Metadata = nil
+		}
+		out = append(out, svc)
+	}
+	return out
 }
 
 // preparePeerAddrs scans the target peer's addresses, filters out unroutable private IPs,
