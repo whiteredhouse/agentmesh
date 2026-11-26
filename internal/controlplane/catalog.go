@@ -126,7 +126,8 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 
 	// Room for a report as it was before metadata, plus the most metadata
 	// a report can carry: metadata alone never makes a report too large.
-	r.Body = http.MaxBytesReader(w, r.Body, api.MaxCatalogReportBytes+api.MaxCatalogMetadataBytes)
+	// The rest is held to its own budget once the report is parsed.
+	r.Body = http.MaxBytesReader(w, r.Body, api.MaxCatalogRequestBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
@@ -136,6 +137,10 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 	var req api.NodeCatalogReport
 	if err := proto.Unmarshal(body, &req); err != nil {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+	if api.CatalogReportBaseSize(&req) > api.MaxCatalogReportBytes {
+		http.Error(w, fmt.Sprintf("Report too large: more than %d bytes besides service metadata", api.MaxCatalogReportBytes), http.StatusBadRequest)
 		return
 	}
 	if len(req.Services) > maxCatalogServices {

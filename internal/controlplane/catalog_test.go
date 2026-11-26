@@ -531,7 +531,8 @@ func exactReport(t *testing.T, size int) *api.NodeCatalogReport {
 
 // The invariant metadata keeps: a report that the control plane took
 // before its services had metadata is still taken with every service's
-// metadata at its limit. A report past both rooms is refused.
+// metadata at its limit. A report whose other fields pass their budget is
+// refused, with or without metadata, and so is one past both rooms.
 func TestHandleNodeCatalog_MetadataNeverMakesAReportTooLarge(t *testing.T) {
 	t.Parallel()
 
@@ -556,6 +557,12 @@ func TestHandleNodeCatalog_MetadataNeverMakesAReportTooLarge(t *testing.T) {
 	}
 	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, body); got != http.StatusNoContent {
 		t.Fatalf("the same report with metadata at its limit: got status %d", got)
+	}
+	// The metadata's room is for metadata: other fields keep the budget
+	// they had before.
+	justOver := exactReport(t, api.MaxCatalogReportBytes+1)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, justOver)); got != http.StatusBadRequest {
+		t.Fatalf("report without metadata one byte past the budget: got status %d, want %d", got, http.StatusBadRequest)
 	}
 	over := exactReport(t, api.MaxCatalogReportBytes+api.MaxCatalogMetadataBytes+1)
 	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, over)); got != http.StatusBadRequest {

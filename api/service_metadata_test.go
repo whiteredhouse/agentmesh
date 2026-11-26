@@ -121,3 +121,29 @@ func TestCatalogMetadataRoomCoversAnyValidMetadata(t *testing.T) {
 		}
 	}
 }
+
+// CatalogReportBaseSize is the size without metadata and leaves the report
+// as it was.
+func TestCatalogReportBaseSize(t *testing.T) {
+	md := map[string]string{"example.mark.drain": `{"reason":"reboot"}`}
+	report := &NodeCatalogReport{Services: []*ServiceInfo{
+		{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Description: "first", Metadata: md},
+		nil,
+		{Type: ServiceType_SERVICE_TYPE_A2A, Name: "b"},
+	}}
+	stripped := proto.Clone(report).(*NodeCatalogReport)
+	for _, svc := range stripped.Services {
+		if svc != nil {
+			svc.Metadata = nil
+		}
+	}
+	if got, want := CatalogReportBaseSize(report), proto.Size(stripped); got != want {
+		t.Fatalf("base size %d, want %d", got, want)
+	}
+	if got := report.Services[0].GetMetadata(); len(got) != 1 || got["example.mark.drain"] != md["example.mark.drain"] {
+		t.Fatalf("metadata changed: %v", got)
+	}
+	if proto.Size(report) <= CatalogReportBaseSize(report) {
+		t.Fatal("metadata added nothing to the size")
+	}
+}
