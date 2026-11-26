@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"unicode"
 	"unicode/utf8"
+
+	"google.golang.org/protobuf/proto"
 )
 
 // Service metadata (ServiceInfo.metadata) is owner-supplied key/value data
@@ -53,6 +55,32 @@ const maxServiceMetadataEntryOverhead = 2 + 2 + 1 + 1 + 1 + 2
 // top of MaxCatalogReportBytes, so a report that fit before metadata always
 // fits with it, and a node never has to drop or trim metadata to report.
 const MaxCatalogMetadataBytes = MaxCatalogServices * (MaxServiceMetadataBytes + MaxServiceMetadataEntries*maxServiceMetadataEntryOverhead)
+
+// MaxCatalogRequestBytes is the most POST /nodes/catalog reads: the room
+// for everything but metadata plus the room for metadata. A receiver also
+// checks CatalogReportBaseSize against MaxCatalogReportBytes, so fields
+// other than metadata never use the metadata's room.
+const MaxCatalogRequestBytes = MaxCatalogReportBytes + MaxCatalogMetadataBytes
+
+// CatalogReportBaseSize is the serialized size of report without its
+// services' metadata: what MaxCatalogReportBytes bounds. It leaves report
+// as it found it, but changes it while it runs, so report must not be
+// shared with another goroutine.
+func CatalogReportBaseSize(report *NodeCatalogReport) int {
+	saved := make([]map[string]string, len(report.GetServices()))
+	for i, svc := range report.GetServices() {
+		if svc != nil {
+			saved[i], svc.Metadata = svc.Metadata, nil
+		}
+	}
+	size := proto.Size(report)
+	for i, svc := range report.GetServices() {
+		if svc != nil {
+			svc.Metadata = saved[i]
+		}
+	}
+	return size
+}
 
 // ValidateServiceMetadata checks a service's metadata: at most
 // MaxServiceMetadataEntries keys, each a valid label key (1-63 chars of
