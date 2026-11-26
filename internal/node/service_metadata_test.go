@@ -281,28 +281,55 @@ func TestServiceRegistry_SharedInfoPointer(t *testing.T) {
 }
 
 // Discovery hands on only metadata a node could have set: a remote peer's
-// invalid metadata is dropped, its service stays listed, and null entries
-// are skipped.
-func TestCheckRemoteCatalog(t *testing.T) {
+// invalid or malformed metadata is dropped, every service stays listed, and
+// null entries are skipped.
+func TestDecodeRemoteCatalog(t *testing.T) {
 	tooMany := map[string]string{}
 	for i := range api.MaxServiceMetadataEntries + 1 {
 		tooMany[fmt.Sprintf("k%d", i)] = "v"
 	}
-	got := checkRemoteCatalog("peer", []*api.ServiceInfo{
-		{Name: "good", Metadata: map[string]string{"example.mark.drain": "reboot"}},
-		nil,
-		{Name: "bad", Metadata: tooMany},
-		{Name: "badkey", Metadata: map[string]string{"bad key": "v"}},
-	})
-	if len(got) != 3 {
-		t.Fatalf("got %d services, want 3", len(got))
+	tooManyJSON, err := json.Marshal(tooMany)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got[0].GetMetadata()["example.mark.drain"] != "reboot" {
-		t.Fatalf("valid metadata lost: %v", got[0].GetMetadata())
+	text := `[
+		{"type":1,"name":"good","description":"d","metadata":{"example.mark.drain":"reboot"}},
+		null,
+		{"type":1,"name":"too-many","metadata":` + string(tooManyJSON) + `},
+		{"type":1,"name":"bad-key","metadata":{"bad key":"v"}},
+		{"type":1,"name":"not-string","metadata":{"k":7}},
+		{"type":1,"name":"not-map","metadata":["k"]},
+		{"type":1,"name":"null-map","metadata":null},
+		{"type":1,"name":"none"}
+	]`
+	got, err := decodeRemoteCatalog("peer", text)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	var names []string
+	for _, svc := range got {
+		names = append(names, svc.GetName())
+	}
+	want := []string{"good", "too-many", "bad-key", "not-string", "not-map", "null-map", "none"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("services %v, want %v", names, want)
+	}
+	if got[0].GetMetadata()["example.mark.drain"] != "reboot" || got[0].GetDescription() != "d" || got[0].GetType() != api.ServiceType(1) {
+		t.Fatalf("valid service decoded wrong: %v", got[0])
 	}
 	for _, svc := range got[1:] {
 		if svc.GetMetadata() != nil {
-			t.Fatalf("%s kept invalid metadata", svc.GetName())
+			t.Fatalf("%s kept metadata %v", svc.GetName(), svc.GetMetadata())
 		}
+	}
+	// What a node's own list_local_services writes decodes back the same.
+	own := []*api.ServiceInfo{{Type: api.ServiceType(1), Name: "a", Metadata: map[string]string{"k": "v"}}}
+	b, err := json.Marshal(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := decodeRemoteCatalog("peer", string(b))
+	if err != nil || len(back) != 1 || !proto.Equal(back[0], own[0]) {
+		t.Fatalf("round trip: %v, %v", back, err)
 	}
 }

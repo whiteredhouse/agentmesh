@@ -431,31 +431,52 @@ func (n *AgentMeshNode) fetchRemoteServiceCatalog(ctx context.Context, peerID pe
 	if !ok {
 		return nil, fmt.Errorf("unexpected content type: %T", res.Content[0])
 	}
-	var services []*api.ServiceInfo
-	if err := json.Unmarshal([]byte(text.Text), &services); err != nil {
-		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text.Text))
-		return nil, fmt.Errorf("unmarshal: %w", err)
-	}
-	return checkRemoteCatalog(peerID, services), nil
+	return decodeRemoteCatalog(peerID, text.Text)
 }
 
-// checkRemoteCatalog drops what a remote peer's catalog should never hold:
-// null entries, and metadata that ValidateServiceMetadata refuses (the
-// service stays listed without it). Discovery only hands on metadata within
-// the bounds a node enforces when it is set.
-func checkRemoteCatalog(peerID peer.ID, services []*api.ServiceInfo) []*api.ServiceInfo {
-	out := services[:0]
-	for _, svc := range services {
+// remoteCatalogEntry decodes one entry of a remote list_local_services
+// answer with its metadata held back as raw JSON: the outer Metadata field
+// shadows ServiceInfo's, so a malformed map fails only that check, not the
+// whole catalog.
+type remoteCatalogEntry struct {
+	*api.ServiceInfo
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// decodeRemoteCatalog parses a remote peer's list_local_services answer.
+// It drops what the catalog should never hold: null entries, and metadata
+// that does not decode as a string map or that ValidateServiceMetadata
+// refuses. The service stays listed without that metadata, so one bad map
+// never hides the peer's other services. Discovery only hands on metadata
+// within the bounds a node enforces when it is set.
+func decodeRemoteCatalog(peerID peer.ID, text string) ([]*api.ServiceInfo, error) {
+	var entries []remoteCatalogEntry
+	if err := json.Unmarshal([]byte(text), &entries); err != nil {
+		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text))
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	services := make([]*api.ServiceInfo, 0, len(entries))
+	for _, entry := range entries {
+		svc := entry.ServiceInfo
 		if svc == nil {
 			continue
 		}
-		if err := api.ValidateServiceMetadata(svc.GetMetadata()); err != nil {
-			logger.Warnf("[Discovery] dropping metadata of %s from %s: %v", svc.GetName(), peerID, err)
-			svc.Metadata = nil
+		svc.Metadata = nil
+		if len(entry.Metadata) > 0 && string(entry.Metadata) != "null" {
+			var md map[string]string
+			err := json.Unmarshal(entry.Metadata, &md)
+			if err == nil {
+				err = api.ValidateServiceMetadata(md)
+			}
+			if err != nil {
+				logger.Warnf("[Discovery] dropping metadata of %s from %s: %v", svc.GetName(), peerID, err)
+			} else if len(md) > 0 {
+				svc.Metadata = md
+			}
 		}
-		out = append(out, svc)
+		services = append(services, svc)
 	}
-	return out
+	return services, nil
 }
 
 // preparePeerAddrs scans the target peer's addresses, filters out unroutable private IPs,
