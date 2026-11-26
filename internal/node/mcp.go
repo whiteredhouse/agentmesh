@@ -445,8 +445,8 @@ type remoteCatalogEntry struct {
 
 // decodeRemoteCatalog parses a remote peer's list_local_services answer.
 // It drops what the catalog should never hold: null entries, and metadata
-// that does not decode as a string map or that ValidateServiceMetadata
-// refuses. The service stays listed without that metadata, so one bad map
+// that DecodeServiceMetadataJSON refuses (not a string map, a null value,
+// or outside ValidateServiceMetadata's bounds). The service stays listed without that metadata, so one bad map
 // never hides the peer's other services. Discovery only hands on metadata
 // within the bounds a node enforces when it is set.
 func decodeRemoteCatalog(peerID peer.ID, text string) ([]*api.ServiceInfo, error) {
@@ -461,19 +461,11 @@ func decodeRemoteCatalog(peerID peer.ID, text string) ([]*api.ServiceInfo, error
 		if svc == nil {
 			continue
 		}
-		svc.Metadata = nil
-		if len(entry.Metadata) > 0 && string(entry.Metadata) != "null" {
-			var md map[string]string
-			err := json.Unmarshal(entry.Metadata, &md)
-			if err == nil {
-				err = api.ValidateServiceMetadata(md)
-			}
-			if err != nil {
-				logger.Warnf("[Discovery] dropping metadata of %s from %s: %v", svc.GetName(), peerID, err)
-			} else if len(md) > 0 {
-				svc.Metadata = md
-			}
+		md, err := api.DecodeServiceMetadataJSON(entry.Metadata)
+		if err != nil {
+			logger.Warnf("[Discovery] dropping metadata of %s from %s: %v", svc.GetName(), peerID, err)
 		}
+		svc.Metadata = md
 		services = append(services, svc)
 	}
 	return services, nil

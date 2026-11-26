@@ -339,7 +339,9 @@ func TestDecodeRemoteCatalog(t *testing.T) {
 		{"type":1,"name":"bad-key","metadata":{"bad key":"v"}},
 		{"type":1,"name":"not-string","metadata":{"k":7}},
 		{"type":1,"name":"not-map","metadata":["k"]},
+		{"type":1,"name":"null-value","metadata":{"flag":null}},
 		{"type":1,"name":"null-map","metadata":null},
+		{"type":1,"name":"empty-value","metadata":{"flag":""}},
 		{"type":1,"name":"none"}
 	]`
 	got, err := decodeRemoteCatalog("peer", text)
@@ -350,14 +352,17 @@ func TestDecodeRemoteCatalog(t *testing.T) {
 	for _, svc := range got {
 		names = append(names, svc.GetName())
 	}
-	want := []string{"good", "too-many", "bad-key", "not-string", "not-map", "null-map", "none"}
+	want := []string{"good", "too-many", "bad-key", "not-string", "not-map", "null-value", "null-map", "empty-value", "none"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("services %v, want %v", names, want)
 	}
 	if got[0].GetMetadata()["example.mark.drain"] != "reboot" || got[0].GetDescription() != "d" || got[0].GetType() != api.ServiceType(1) {
 		t.Fatalf("valid service decoded wrong: %v", got[0])
 	}
-	for _, svc := range got[1:] {
+	if v, ok := got[7].GetMetadata()["flag"]; !ok || v != "" {
+		t.Fatalf("explicit empty value lost: %v", got[7].GetMetadata())
+	}
+	for _, svc := range append(got[1:7:7], got[8]) {
 		if svc.GetMetadata() != nil {
 			t.Fatalf("%s kept metadata %v", svc.GetName(), svc.GetMetadata())
 		}
