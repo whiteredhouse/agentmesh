@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/google/agentmesh/api"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -117,7 +119,18 @@ type ExternalIngressGate interface {
 type ServiceRegistry struct {
 	mu       sync.RWMutex
 	services map[string]Service
-	dht      directoryProvider
+	// infos is the registry's own copy of each registered service's
+	// ServiceInfo, by name, taken at Register so that a caller reusing the
+	// request it registered with never races with List. SetMetadata
+	// replaces an entry with a new copy (never changes one in place), and
+	// List answers with copies of them.
+	infos map[string]*api.ServiceInfo
+
+	// onMetadataChange, if set, is called (without r.mu held) after
+	// Register or SetMetadata changed a service's metadata. The node asks
+	// for an early catalog report with it.
+	onMetadataChange func()
+	dht              directoryProvider
 
 	// reprovideNow asks the node to run a reprovide cycle now, so a service
 	// registered after the loop last ran does not wait a whole interval to be
@@ -145,6 +158,7 @@ func NewServiceRegistry(d directoryProvider, backendProbeTimeout time.Duration) 
 	}
 	return &ServiceRegistry{
 		services:            map[string]Service{},
+		infos:               map[string]*api.ServiceInfo{},
 		dht:                 d,
 		backendProbeTimeout: backendProbeTimeout,
 	}
@@ -178,15 +192,27 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	if err := api.ValidateServiceIngress(info.Type, info.GetIngress()); err != nil {
 		return fmt.Errorf("service %q: %w", info.Name, err)
 	}
+	if err := api.ValidateServiceMetadata(info.GetMetadata()); err != nil {
+		return fmt.Errorf("service %q: %w", info.Name, err)
+	}
+	// The registry's own copy, taken before the call returns: the caller
+	// may reuse its request afterwards.
+	// From here on the registry works from its copy alone.
+	owned := proto.Clone(info).(*api.ServiceInfo)
+	info = owned
 
 	// Policy is evaluated on type://name and the registry is keyed on name,
 	// so a second type under the same name would let a grant for one reach
 	// the other. One name, one service.
 	r.mu.RLock()
 	existing, taken := r.services[info.Name]
+	var existingType api.ServiceType
+	if taken {
+		existingType = r.infoLocked(info.Name, existing).GetType()
+	}
 	r.mu.RUnlock()
-	if taken && existing.Info().Type != info.Type {
-		return fmt.Errorf("service name %q is already registered as %s; a name cannot serve two types", info.Name, existing.Info().Type)
+	if taken && existingType != info.Type {
+		return fmt.Errorf("service name %q is already registered as %s; a name cannot serve two types", info.Name, existingType)
 	}
 
 	if err := svc.Init(ctx); err != nil {
@@ -220,7 +246,12 @@ func (r *ServiceRegistry) Register(ctx context.Context, svc Service) error {
 	r.mu.Lock()
 	replaced := r.services[info.Name]
 	r.services[info.Name] = svc
+	metadataChanged := !maps.Equal(r.infos[info.Name].GetMetadata(), owned.GetMetadata())
+	r.setInfoLocked(owned)
 	r.mu.Unlock()
+	if metadataChanged && r.onMetadataChange != nil {
+		r.onMetadataChange()
+	}
 
 	if replaced != nil && replaced != svc {
 		if err := replaced.Teardown(); err != nil {
@@ -252,11 +283,16 @@ func isUnannouncedService(svc Service) bool {
 func (r *ServiceRegistry) Unregister(ctx context.Context, name string) error {
 	r.mu.Lock()
 	svc, ok := r.services[name]
+	var info *api.ServiceInfo
+	if ok {
+		info = r.infoLocked(name, svc)
+	}
 	delete(r.services, name)
+	delete(r.infos, name)
 	typeStillServed := false
 	if ok {
-		for _, other := range r.services {
-			if !isUnannouncedService(other) && other.Info().Type == svc.Info().Type {
+		for otherName, other := range r.services {
+			if !isUnannouncedService(other) && r.infoLocked(otherName, other).GetType() == info.GetType() {
 				typeStillServed = true
 				break
 			}
@@ -266,7 +302,6 @@ func (r *ServiceRegistry) Unregister(ctx context.Context, name string) error {
 	if !ok {
 		return nil
 	}
-	info := svc.Info()
 	if !isUnannouncedService(svc) {
 		r.withdraw(ctx, info.Type, info.Name)
 		if !typeStillServed {
@@ -377,11 +412,11 @@ func (r *ServiceRegistry) withdraw(ctx context.Context, serviceType api.ServiceT
 func (r *ServiceRegistry) WithdrawAll(ctx context.Context) {
 	r.mu.RLock()
 	infos := make([]*api.ServiceInfo, 0, len(r.services))
-	for _, svc := range r.services {
+	for name, svc := range r.services {
 		if isUnannouncedService(svc) {
 			continue
 		}
-		infos = append(infos, svc.Info())
+		infos = append(infos, r.infoLocked(name, svc))
 	}
 	r.mu.RUnlock()
 	types := map[api.ServiceType]bool{}
@@ -407,8 +442,10 @@ func (r *ServiceRegistry) Get(name string) (Service, bool) {
 // on t://name, and a service of another type under that name is not what
 // the caller was granted.
 func (r *ServiceRegistry) GetTyped(t api.ServiceType, name string) (Service, bool) {
-	svc, ok := r.Get(name)
-	if !ok || svc.Info().Type != t {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	svc, ok := r.services[name]
+	if !ok || r.infoLocked(name, svc).GetType() != t {
 		return nil, false
 	}
 	return svc, true
@@ -420,14 +457,71 @@ func (r *ServiceRegistry) List(typeFilter api.ServiceType) []*api.ServiceInfo {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := []*api.ServiceInfo{}
-	for _, svc := range r.services {
-		info := svc.Info()
+	for name, svc := range r.services {
+		info := r.infoLocked(name, svc)
 		if typeFilter != api.ServiceType_SERVICE_TYPE_UNSPECIFIED && info.Type != typeFilter {
 			continue
 		}
-		out = append(out, info)
+		out = append(out, proto.Clone(info).(*api.ServiceInfo))
 	}
 	return out
+}
+
+// SetMetadata replaces the metadata of the registered service of type
+// serviceType named name; nil or empty clears it. Discovery by type reads
+// each provider's live list_local_services answer, so other nodes see the
+// change on their next discovery; nothing is announced again. It reports
+// whether the metadata changed.
+func (r *ServiceRegistry) SetMetadata(serviceType api.ServiceType, name string, md map[string]string) (bool, error) {
+	if err := api.ValidateServiceMetadata(md); err != nil {
+		return false, fmt.Errorf("service %q: %w", name, err)
+	}
+	r.mu.Lock()
+	svc, ok := r.services[name]
+	var cur *api.ServiceInfo
+	if ok {
+		cur = r.infoLocked(name, svc)
+	}
+	if !ok || cur.GetType() != serviceType {
+		r.mu.Unlock()
+		return false, fmt.Errorf("no %s service %q is registered", serviceType, name)
+	}
+	if maps.Equal(cur.GetMetadata(), md) {
+		r.mu.Unlock()
+		return false, nil
+	}
+	next := proto.Clone(cur).(*api.ServiceInfo)
+	next.Metadata = nil
+	if len(md) > 0 {
+		next.Metadata = maps.Clone(md)
+	}
+	r.setInfoLocked(next)
+	r.mu.Unlock()
+	if r.onMetadataChange != nil {
+		r.onMetadataChange()
+	}
+	return true, nil
+}
+
+// infoLocked is the registry's copy of the ServiceInfo of the service
+// registered under name, by the registry's own key: never the service's
+// Info(), which may belong to the caller that registered it. r.mu must be
+// held.
+func (r *ServiceRegistry) infoLocked(name string, svc Service) *api.ServiceInfo {
+	if info, ok := r.infos[name]; ok {
+		return info
+	}
+	// Every route in records a copy; this keeps a zero registry safe.
+	return svc.Info()
+}
+
+// setInfoLocked records info, which the registry owns from now on, as the
+// registered service's ServiceInfo. r.mu must be held for writing.
+func (r *ServiceRegistry) setInfoLocked(info *api.ServiceInfo) {
+	if r.infos == nil {
+		r.infos = map[string]*api.ServiceInfo{}
+	}
+	r.infos[info.GetName()] = info
 }
 
 // insertService inserts a service into the registry without calling Init or
@@ -435,7 +529,9 @@ func (r *ServiceRegistry) List(typeFilter api.ServiceType) []*api.ServiceInfo {
 func (r *ServiceRegistry) insertService(svc Service) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.services[svc.Info().Name] = svc
+	info := proto.Clone(svc.Info()).(*api.ServiceInfo)
+	r.services[info.GetName()] = svc
+	r.setInfoLocked(info)
 }
 
 // TeardownAll calls Teardown on every registered service and clears the
@@ -444,6 +540,7 @@ func (r *ServiceRegistry) TeardownAll() {
 	r.mu.Lock()
 	svcs := r.services
 	r.services = map[string]Service{}
+	r.infos = map[string]*api.ServiceInfo{}
 	r.mu.Unlock()
 	for name, svc := range svcs {
 		if err := svc.Teardown(); err != nil {
@@ -458,9 +555,13 @@ func (r *ServiceRegistry) TeardownAll() {
 // being reprovided, and returns on a later tick once it answers again.
 func (r *ServiceRegistry) ReprovideAll(ctx context.Context) int {
 	r.mu.Lock()
-	toProvide := make([]Service, 0, len(r.services))
-	for _, svc := range r.services {
-		toProvide = append(toProvide, svc)
+	type provided struct {
+		svc  Service
+		info *api.ServiceInfo
+	}
+	toProvide := make([]provided, 0, len(r.services))
+	for name, svc := range r.services {
+		toProvide = append(toProvide, provided{svc, r.infoLocked(name, svc)})
 	}
 	r.mu.Unlock()
 
@@ -469,8 +570,8 @@ func (r *ServiceRegistry) ReprovideAll(ctx context.Context) int {
 	sem := make(chan struct{}, 5)
 
 Loop:
-	for _, svc := range toProvide {
-		svc := svc
+	for _, p := range toProvide {
+		svc, info := p.svc, p.info
 		select {
 		case <-ctx.Done():
 			break Loop
@@ -487,7 +588,6 @@ Loop:
 			if isUnannouncedService(svc) {
 				return
 			}
-			info := svc.Info()
 			if err := advertisable(ctx, svc, r.backendProbeTimeout); err != nil {
 				withheld.Add(1)
 				// On shutdown every service fails this way, and saying so

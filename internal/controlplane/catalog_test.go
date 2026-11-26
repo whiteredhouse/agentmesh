@@ -20,6 +20,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -191,7 +192,6 @@ func TestHandleNodeCatalog(t *testing.T) {
 	if len(got.GetServiceStatuses()) != 1 || !proto.Equal(got.GetServiceStatuses()[0], busy) {
 		t.Fatalf("node_catalog statuses = %v, want %v", got.GetServiceStatuses(), busy)
 	}
-
 	// An empty report is valid and clears the node's services.
 	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, catalogBody(t)); got != http.StatusNoContent {
 		t.Fatalf("empty report: got status %d, want %d", got, http.StatusNoContent)
@@ -262,6 +262,8 @@ func TestHandleNodeCatalog_Rejections(t *testing.T) {
 		{name: "missing challenge", auth: bearer(biscuitBytes), body: ok, want: http.StatusUnauthorized},
 		{name: "invalid body", auth: bearer(biscuitBytes), priv: priv, body: []byte(`{"services":[]}`), want: http.StatusBadRequest},
 		{name: "too many services", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, tooMany...), want: http.StatusBadRequest},
+		{name: "invalid service metadata", auth: bearer(biscuitBytes), priv: priv, body: catalogBody(t, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
+			Metadata: map[string]string{"bad key": "x"}}), want: http.StatusBadRequest},
 		// A status time JSON cannot render would break /admin/status.
 		{name: "status since out of range", auth: bearer(biscuitBytes), priv: priv, body: statusBody(t, &api.ServiceStatusReport{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: "a",
 			Status: &api.ServiceStatus{State: api.ServiceState_SERVICE_STATE_BUSY, Since: &timestamppb.Timestamp{Seconds: 253402300800}}}), want: http.StatusBadRequest},
@@ -476,5 +478,94 @@ func TestCatalogPeerIDCanonicalization(t *testing.T) {
 	}
 	if snap := srv.catalogSnapshot(); len(snap) != 0 {
 		t.Fatalf("banning a CIDv1-enrolled node must evict its cached report, got %v", snap)
+	}
+}
+
+// fullMetadata is metadata at every bound at once, with the most encoding
+// overhead: as many keys as allowed, values long enough for two-byte
+// lengths, MaxServiceMetadataBytes in all.
+func fullMetadata(t *testing.T) map[string]string {
+	t.Helper()
+	md := map[string]string{}
+	left := api.MaxServiceMetadataBytes
+	for i := range api.MaxServiceMetadataEntries {
+		key := strconv.Itoa(i)
+		size := (api.MaxServiceMetadataBytes / api.MaxServiceMetadataEntries) - len(key)
+		if i == api.MaxServiceMetadataEntries-1 {
+			size = left - len(key)
+		}
+		md[key] = string(bytes.Repeat([]byte("x"), size))
+		left -= len(key) + size
+	}
+	if err := api.ValidateServiceMetadata(md); err != nil || left != 0 {
+		t.Fatalf("not metadata at its limit: %v, %d bytes left", err, left)
+	}
+	return md
+}
+
+// exactReport is a report of the most services a report may carry,
+// without metadata, of exactly size bytes.
+func exactReport(t *testing.T, size int) *api.NodeCatalogReport {
+	t.Helper()
+	report := &api.NodeCatalogReport{}
+	for i := range maxCatalogServices {
+		report.Services = append(report.Services, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: fmt.Sprintf("agent-%03d", i), Description: "d"})
+	}
+	// Grow the last description until the report is exactly size bytes;
+	// a length prefix can grow by a byte on the way, so step one at a time.
+	last := report.Services[len(report.Services)-1]
+	for proto.Size(report) < size {
+		grow := size - proto.Size(report)
+		if grow > 1024 {
+			grow -= 8
+		} else {
+			grow = 1
+		}
+		last.Description += string(bytes.Repeat([]byte("d"), grow))
+	}
+	if got := proto.Size(report); got != size {
+		t.Fatalf("report is %d bytes, want %d", got, size)
+	}
+	return report
+}
+
+// The invariant metadata keeps: a report that the control plane took
+// before its services had metadata is still taken with every service's
+// metadata at its limit. A report whose other fields pass their budget is
+// refused, with or without metadata, and so is one past both rooms.
+func TestHandleNodeCatalog_MetadataNeverMakesAReportTooLarge(t *testing.T) {
+	t.Parallel()
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	priv, biscuitBytes := enrollRefreshTestNode(t, context.Background(), store)
+
+	full := exactReport(t, api.MaxCatalogReportBytes)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, full)); got != http.StatusNoContent {
+		t.Fatalf("report of exactly the limit: got status %d", got)
+	}
+	md := fullMetadata(t)
+	for _, svc := range full.Services {
+		svc.Metadata = md
+	}
+	body := reportBody(t, full)
+	if len(body) > api.MaxCatalogReportBytes+api.MaxCatalogMetadataBytes {
+		t.Fatalf("report with metadata at its limit is %d bytes, room is %d", len(body), api.MaxCatalogReportBytes+api.MaxCatalogMetadataBytes)
+	}
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, body); got != http.StatusNoContent {
+		t.Fatalf("the same report with metadata at its limit: got status %d", got)
+	}
+	// The metadata's room is for metadata: other fields keep the budget
+	// they had before.
+	justOver := exactReport(t, api.MaxCatalogReportBytes+1)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, justOver)); got != http.StatusBadRequest {
+		t.Fatalf("report without metadata one byte past the budget: got status %d, want %d", got, http.StatusBadRequest)
+	}
+	over := exactReport(t, api.MaxCatalogReportBytes+api.MaxCatalogMetadataBytes+1)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, over)); got != http.StatusBadRequest {
+		t.Fatalf("report past the room: got status %d, want %d", got, http.StatusBadRequest)
 	}
 }

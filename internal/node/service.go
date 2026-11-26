@@ -187,6 +187,7 @@ func buildRegisterRequest(sCfg api.ServiceConfig) (*api.RegisterServiceRequest, 
 			Name:        sCfg.Name,
 			Description: sCfg.Description,
 			Ingress:     ing,
+			Metadata:    sCfg.Metadata,
 		},
 	}
 	switch {

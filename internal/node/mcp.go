@@ -431,10 +431,52 @@ func (n *AgentMeshNode) fetchRemoteServiceCatalog(ctx context.Context, peerID pe
 	if !ok {
 		return nil, fmt.Errorf("unexpected content type: %T", res.Content[0])
 	}
-	var services []*api.ServiceInfo
-	if err := json.Unmarshal([]byte(text.Text), &services); err != nil {
-		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text.Text))
+	return decodeRemoteCatalog(peerID, text.Text)
+}
+
+// remoteCatalogEntry decodes one entry of a remote list_local_services
+// answer with its metadata held back as raw JSON: the outer Metadata field
+// shadows ServiceInfo's, so a malformed map fails only that check.
+type remoteCatalogEntry struct {
+	*api.ServiceInfo
+	Metadata json.RawMessage `json:"metadata,omitempty"`
+}
+
+// decodeRemoteCatalog parses a remote peer's list_local_services answer,
+// which is untrusted input. Only an answer that is not a JSON array fails
+// as a whole; past that, each entry is decoded on its own, so one bad entry
+// never hides the peer's other services:
+//   - an entry that is null, empty or does not decode as a service is
+//     skipped;
+//   - metadata that DecodeServiceMetadataJSON refuses (not a string map, a
+//     null value, or outside ValidateServiceMetadata's bounds) is dropped,
+//     and the service stays listed without it.
+//
+// Discovery so only hands on metadata within the bounds a node enforces
+// when it is set. FuzzDecodeRemoteCatalog holds these rules.
+func decodeRemoteCatalog(peerID peer.ID, text string) ([]*api.ServiceInfo, error) {
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		logger.Warnf("[Discovery] catalog unmarshal failed; raw text from %s: %q", peerID, truncateForLog(text))
 		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	services := make([]*api.ServiceInfo, 0, len(raw))
+	for i, item := range raw {
+		var entry remoteCatalogEntry
+		if err := json.Unmarshal(item, &entry); err != nil {
+			logger.Warnf("[Discovery] skipping catalog entry %d from %s: %v", i, peerID, err)
+			continue
+		}
+		svc := entry.ServiceInfo
+		if svc == nil {
+			continue
+		}
+		md, err := api.DecodeServiceMetadataJSON(entry.Metadata)
+		if err != nil {
+			logger.Warnf("[Discovery] dropping metadata of %s from %s: %v", svc.GetName(), peerID, err)
+		}
+		svc.Metadata = md
+		services = append(services, svc)
 	}
 	return services, nil
 }

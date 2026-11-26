@@ -815,6 +815,7 @@ func (n *AgentMeshNode) Start(ctx context.Context) error {
 
 	n.services = NewServiceRegistry(n.Directory, n.config.BackendProbeTimeout)
 	n.services.reprovideNow = n.triggerReprovide
+	n.services.onMetadataChange = n.catalogReportSoon
 	n.services.onIngressRegistered = n.logIngressURLs
 	n.applyPendingEgress(ctx)
 
@@ -2261,6 +2262,9 @@ func (n *AgentMeshNode) RegisterService(ctx context.Context, req *api.RegisterSe
 	if req.Backend == nil {
 		return fmt.Errorf("service backend is required")
 	}
+	// The node keeps its own copy: the caller may reuse its request for
+	// another registration as soon as this returns.
+	req = proto.Clone(req).(*api.RegisterServiceRequest)
 	svc, err := NewServiceFromRequest(req)
 	if err != nil {
 		return err
@@ -2465,6 +2469,7 @@ func (n *AgentMeshNode) DiscoverRemoteServicesStream(ctx context.Context, servic
 						LocalProxyUrl:  n.localProxyURL(peerID, typeStr, info.Name),
 						SrvName:        info.Name,
 						SrvDescription: info.Description,
+						SrvMetadata:    info.GetMetadata(),
 					}
 					select {
 					case <-fanoutCtx.Done():
@@ -2557,6 +2562,7 @@ func (n *AgentMeshNode) discoverServicesByType(ctx context.Context, serviceType 
 				LocalProxyUrl:  n.localProxyURL(r.peerID, typeStr, info.Name),
 				SrvName:        info.Name,
 				SrvDescription: info.Description,
+				SrvMetadata:    info.GetMetadata(),
 			})
 		}
 	}

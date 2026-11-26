@@ -181,6 +181,14 @@ message ServiceInfo {
   string description = 3;
   // Optional external ingress exposure for this service.
   ServiceIngress ingress = 4;
+  // Optional key/value metadata the service's owner attaches, such as a
+  // maintenance note or a deprecation notice. Agent Mesh carries it in
+  // list_local_services, discovery and catalog reports but never acts on
+  // it. Unlike node labels it is not attested by the control plane: it is
+  // what the hosting node says about its own service. See
+  // ValidateServiceMetadata for the bounds.
+  // Field number from 1000 to stay clear of upstream (agentiscale fork).
+  map<string, string> metadata = 1000;
 }
 
 // ServiceState is whether a service is working on a request.
@@ -232,6 +240,11 @@ message DiscoveredProvider {
   string local_proxy_url = 2;
   string srv_name = 3;
   string srv_description = 4;
+  // The service's metadata, as its node lists it (ServiceInfo.metadata).
+  // Set only by discovery by type, which reads each provider's live
+  // catalog; a lookup by name answers from the directory alone.
+  // Field number from 1000 to stay clear of upstream (agentiscale fork).
+  map<string, string> srv_metadata = 1000;
 }
 
 message ControlPlaneInfoResponse {

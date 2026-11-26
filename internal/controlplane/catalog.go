@@ -29,7 +29,7 @@ import (
 
 // maxCatalogServices bounds one report so a single admitted node cannot grow
 // the in-memory cache without limit.
-const maxCatalogServices = 512
+const maxCatalogServices = api.MaxCatalogServices
 
 // nodeCatalogEntry is what HandleNodeCatalog caches per reporting peer.
 type nodeCatalogEntry struct {
@@ -124,7 +124,10 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	// Room for a report as it was before metadata, plus the most metadata
+	// a report can carry: metadata alone never makes a report too large.
+	// The rest is held to its own budget once the report is parsed.
+	r.Body = http.MaxBytesReader(w, r.Body, api.MaxCatalogRequestBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
@@ -136,8 +139,14 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
+	// Count first: the metadata room is sized for this many services, and
+	// measuring the base size copies the report.
 	if len(req.Services) > maxCatalogServices {
 		http.Error(w, fmt.Sprintf("Too many services in report (max %d)", maxCatalogServices), http.StatusBadRequest)
+		return
+	}
+	if api.CatalogReportBaseSize(&req) > api.MaxCatalogReportBytes {
+		http.Error(w, fmt.Sprintf("Report too large: more than %d bytes besides service metadata", api.MaxCatalogReportBytes), http.StatusBadRequest)
 		return
 	}
 	// A status time JSON cannot render would break every later
@@ -151,7 +160,14 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, svc := range req.Services {
-		if svc == nil || svc.GetIngress() == nil {
+		if svc == nil {
+			continue
+		}
+		if err := api.ValidateServiceMetadata(svc.GetMetadata()); err != nil {
+			http.Error(w, "Invalid service metadata: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if svc.GetIngress() == nil {
 			continue
 		}
 		if err := api.ValidateServiceIngress(svc.GetType(), svc.GetIngress()); err != nil {
