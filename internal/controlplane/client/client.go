@@ -265,13 +265,7 @@ func (c *Client) ReportCatalog(ctx context.Context, biscuit []byte, services []*
 // ReportCatalogWithStatus is ReportCatalog with what each service is doing
 // now (agentiscale fork).
 func (c *Client) ReportCatalogWithStatus(ctx context.Context, biscuit []byte, services []*api.ServiceInfo, statuses []*api.ServiceStatusReport) error {
-	return c.SendCatalogReport(ctx, biscuit, &api.NodeCatalogReport{Services: services, ServiceStatuses: statuses})
-}
-
-// SendCatalogReport is POST /nodes/catalog with a whole report, such as one
-// that says it left metadata out (agentiscale fork).
-func (c *Client) SendCatalogReport(ctx context.Context, biscuit []byte, report *api.NodeCatalogReport) error {
-	payload, err := proto.Marshal(report)
+	payload, err := proto.Marshal(&api.NodeCatalogReport{Services: services, ServiceStatuses: statuses})
 	if err != nil {
 		return fmt.Errorf("failed to encode catalog report: %w", err)
 	}

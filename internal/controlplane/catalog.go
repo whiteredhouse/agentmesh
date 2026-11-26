@@ -29,16 +29,13 @@ import (
 
 // maxCatalogServices bounds one report so a single admitted node cannot grow
 // the in-memory cache without limit.
-const maxCatalogServices = 512
+const maxCatalogServices = api.MaxCatalogServices
 
 // nodeCatalogEntry is what HandleNodeCatalog caches per reporting peer.
 type nodeCatalogEntry struct {
-	Services []*api.ServiceInfo
-	Statuses []*api.ServiceStatusReport // agentiscale fork
-	// MetadataOmitted: the report left service metadata out to fit
-	// (agentiscale fork).
-	MetadataOmitted bool
-	ReportedAt      time.Time
+	Services   []*api.ServiceInfo
+	Statuses   []*api.ServiceStatusReport // agentiscale fork
+	ReportedAt time.Time
 }
 
 // catalogSnapshot returns a stable copy of the current node service catalog
@@ -80,7 +77,7 @@ func (s *Server) catalogViewFor(nodes []storage.EnrolledNode, now time.Time) map
 			}
 			services = append(services, svc)
 		}
-		view[node.PeerID] = &api.NodeServices{Services: services, ServiceStatuses: entry.Statuses, MetadataOmitted: entry.MetadataOmitted, ReportTime: timestamppb.New(entry.ReportedAt)}
+		view[node.PeerID] = &api.NodeServices{Services: services, ServiceStatuses: entry.Statuses, ReportTime: timestamppb.New(entry.ReportedAt)}
 	}
 	return view
 }
@@ -127,9 +124,9 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A node sends up to MaxCatalogReportBytes as is, plus the
-	// metadata_omitted flag when it left metadata out to fit.
-	r.Body = http.MaxBytesReader(w, r.Body, api.MaxCatalogReportBytes+api.CatalogReportFlagBytes)
+	// Room for a report as it was before metadata, plus the most metadata
+	// a report can carry: metadata alone never makes a report too large.
+	r.Body = http.MaxBytesReader(w, r.Body, api.MaxCatalogReportBytes+api.MaxCatalogMetadataBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
@@ -174,10 +171,9 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 
 	s.catalogMu.Lock()
 	s.catalog[nodeRecord.PeerID] = nodeCatalogEntry{
-		Services:        req.Services,
-		Statuses:        req.ServiceStatuses,
-		MetadataOmitted: req.GetMetadataOmitted(),
-		ReportedAt:      time.Now(),
+		Services:   req.Services,
+		Statuses:   req.ServiceStatuses,
+		ReportedAt: time.Now(),
 	}
 	catalogEntries.Set(float64(len(s.catalog)))
 	s.catalogMu.Unlock()
