@@ -15,6 +15,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"unicode"
 	"unicode/utf8"
@@ -111,4 +112,66 @@ func ValidateServiceMetadata(md map[string]string) error {
 		return fmt.Errorf("service metadata is %d bytes (max %d)", total, MaxServiceMetadataBytes)
 	}
 	return nil
+}
+
+// ServiceMetadata is service metadata as a config file or a JSON document
+// holds it. Decoding refuses a null value instead of reading it as "": a key
+// that is present must carry a string, so a caller that tests for a key
+// never mistakes a malformed entry for one set on purpose. An explicit ""
+// stays "".
+type ServiceMetadata map[string]string
+
+// UnmarshalYAML refuses null values (yaml.v2's Unmarshaler).
+func (m *ServiceMetadata) UnmarshalYAML(unmarshal func(any) error) error {
+	var raw map[string]*string
+	if err := unmarshal(&raw); err != nil {
+		return err
+	}
+	md, err := nonNullMetadata(raw)
+	*m = md
+	return err
+}
+
+// UnmarshalJSON refuses null values.
+func (m *ServiceMetadata) UnmarshalJSON(data []byte) error {
+	var raw map[string]*string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	md, err := nonNullMetadata(raw)
+	*m = md
+	return err
+}
+
+// DecodeServiceMetadataJSON decodes metadata a JSON document carries (a
+// JSON null or absent value is no metadata) and checks it: a string map
+// without null values, within ValidateServiceMetadata's bounds.
+func DecodeServiceMetadataJSON(data []byte) (map[string]string, error) {
+	var md ServiceMetadata
+	if len(data) > 0 {
+		if err := json.Unmarshal(data, &md); err != nil {
+			return nil, err
+		}
+	}
+	if err := ValidateServiceMetadata(md); err != nil {
+		return nil, err
+	}
+	if len(md) == 0 {
+		return nil, nil
+	}
+	return md, nil
+}
+
+func nonNullMetadata(raw map[string]*string) (ServiceMetadata, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	md := make(ServiceMetadata, len(raw))
+	for k, v := range raw {
+		if v == nil {
+			return nil, fmt.Errorf("service metadata key %q has a null value", k)
+		}
+		md[k] = *v
+	}
+	return md, nil
 }

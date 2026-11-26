@@ -44,8 +44,8 @@ type ServiceConfig struct {
 	Ingress        *IngressConfig    `yaml:"ingress,omitempty"`
 	// Metadata is the service's initial ServiceInfo.metadata: key/value
 	// data Agent Mesh carries in discovery but never acts on. See
-	// ValidateServiceMetadata.
-	Metadata map[string]string `yaml:"metadata,omitempty"`
+	// ValidateServiceMetadata. A null value is refused, not read as "".
+	Metadata ServiceMetadata `yaml:"metadata,omitempty"`
 }
 
 // NodeConfig defines the optional attenuation rules and static services for a specific Agent Mesh Node.

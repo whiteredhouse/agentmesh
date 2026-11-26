@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"gopkg.in/yaml.v2"
 )
 
 func TestValidateServiceMetadata(t *testing.T) {
@@ -204,4 +205,36 @@ func TestCatalogReportBaseSizeConcurrentReaders(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// A present key always carries a string: null is refused in config files
+// and JSON, and an explicit "" stays "".
+func TestServiceMetadataRefusesNull(t *testing.T) {
+	for _, doc := range []string{"metadata: {flag: null}\n", "metadata:\n  flag:\n", "metadata: {flag: ~}\n"} {
+		var cfg ServiceConfig
+		if err := yaml.UnmarshalStrict([]byte(doc), &cfg); err == nil {
+			t.Errorf("%q: null value taken as %v", doc, cfg.Metadata)
+		}
+	}
+	var cfg ServiceConfig
+	if err := yaml.UnmarshalStrict([]byte("metadata: {flag: \"\", note: hi}\n"), &cfg); err != nil {
+		t.Fatalf("empty value refused: %v", err)
+	}
+	if v, ok := cfg.Metadata["flag"]; !ok || v != "" || cfg.Metadata["note"] != "hi" {
+		t.Fatalf("config metadata %v", cfg.Metadata)
+	}
+	for _, bad := range []string{`{"flag":null}`, `{"k":7}`, `["k"]`, `{"bad key":"v"}`} {
+		if md, err := DecodeServiceMetadataJSON([]byte(bad)); err == nil {
+			t.Errorf("%s: decoded as %v", bad, md)
+		}
+	}
+	for _, none := range []string{"", "null", "{}"} {
+		if md, err := DecodeServiceMetadataJSON([]byte(none)); err != nil || md != nil {
+			t.Errorf("%q: %v, %v", none, md, err)
+		}
+	}
+	md, err := DecodeServiceMetadataJSON([]byte(`{"flag":""}`))
+	if v, ok := md["flag"]; err != nil || !ok || v != "" {
+		t.Fatalf(`{"flag":""}: %v, %v`, md, err)
+	}
 }
