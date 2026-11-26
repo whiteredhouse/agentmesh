@@ -125,7 +125,9 @@ func (s *Server) HandleNodeCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+	// A node sends up to MaxCatalogReportBytes as is, plus the
+	// metadata_omitted flag when it left metadata out to fit.
+	r.Body = http.MaxBytesReader(w, r.Body, api.MaxCatalogReportBytes+api.CatalogReportFlagBytes)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
