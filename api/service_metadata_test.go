@@ -76,8 +76,28 @@ func TestValidateServiceMetadata(t *testing.T) {
 // serialized ServiceInfo never passes one service's share of the room.
 func TestCatalogMetadataRoomCoversAnyValidMetadata(t *testing.T) {
 	perService := MaxCatalogMetadataBytes / MaxCatalogServices
+	// Measured in a report, so the growth of the service's own length
+	// prefix counts too, for services just under each varint boundary
+	// (one- and two-byte lengths; a service stays under 2 MiB, so a
+	// three-byte length never grows).
+	bases := []*ServiceInfo{{Name: "a"}}
+	for _, limit := range []int{1 << 7, 1 << 14} {
+		svc := &ServiceInfo{Name: "a"}
+		svc.Description = strings.Repeat("d", limit-1-proto.Size(svc)-3)
+		for proto.Size(svc) < limit-1 {
+			svc.Description += "d"
+		}
+		bases = append(bases, svc)
+	}
 	added := func(md map[string]string) int {
-		return proto.Size(&ServiceInfo{Name: "a", Metadata: md}) - proto.Size(&ServiceInfo{Name: "a"})
+		most := 0
+		for _, base := range bases {
+			with := proto.Clone(base).(*ServiceInfo)
+			with.Metadata = md
+			grew := proto.Size(&NodeCatalogReport{Services: []*ServiceInfo{with}}) - proto.Size(&NodeCatalogReport{Services: []*ServiceInfo{base}})
+			most = max(most, grew)
+		}
+		return most
 	}
 	shapes := map[string]map[string]string{}
 	// Most entries, values long enough for two-byte lengths, bytes at the limit.
