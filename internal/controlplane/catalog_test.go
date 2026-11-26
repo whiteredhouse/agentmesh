@@ -566,10 +566,57 @@ func withoutMetadata(report *api.NodeCatalogReport) *api.NodeCatalogReport {
 	return out
 }
 
-// A node fits its catalog report to api.MaxCatalogReportBytes, so the
-// control plane must take a report that large.
-func TestCatalogRequestLimitTakesAFittedReport(t *testing.T) {
-	if api.MaxCatalogReportBytes > maxRequestBodyBytes {
-		t.Fatalf("nodes fit reports to %d bytes, the control plane takes %d", api.MaxCatalogReportBytes, maxRequestBodyBytes)
+// exactReport is a report of the most services a report may carry,
+// without metadata, of exactly size bytes.
+func exactReport(t *testing.T, size int) *api.NodeCatalogReport {
+	t.Helper()
+	report := &api.NodeCatalogReport{}
+	for i := range maxCatalogServices {
+		report.Services = append(report.Services, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: fmt.Sprintf("agent-%03d", i), Description: "d"})
+	}
+	// Grow the last description until the report is exactly size bytes;
+	// a length prefix can grow by a byte on the way, so step one at a time.
+	last := report.Services[len(report.Services)-1]
+	for proto.Size(report) < size {
+		grow := size - proto.Size(report)
+		if grow > 1024 {
+			grow -= 8
+		} else {
+			grow = 1
+		}
+		last.Description += string(bytes.Repeat([]byte("d"), grow))
+	}
+	if got := proto.Size(report); got != size {
+		t.Fatalf("report is %d bytes, want %d", got, size)
+	}
+	return report
+}
+
+// A report that fit as it was still fits once the node leaves metadata
+// out and sets metadata_omitted; one past the flag's room does not.
+func TestHandleNodeCatalog_FlagFitsAFullReport(t *testing.T) {
+	t.Parallel()
+	if flag := proto.Size(&api.NodeCatalogReport{MetadataOmitted: true}); flag > api.CatalogReportFlagBytes {
+		t.Fatalf("metadata_omitted takes %d bytes, room is %d", flag, api.CatalogReportFlagBytes)
+	}
+
+	srv, store, cpURL := setupTestServer(t, "")
+	defer func() {
+		_ = srv.Close()
+		_ = store.Close()
+	}()
+	priv, biscuitBytes := enrollRefreshTestNode(t, context.Background(), store)
+
+	full := exactReport(t, api.MaxCatalogReportBytes)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, full)); got != http.StatusNoContent {
+		t.Fatalf("report of exactly the limit: got status %d", got)
+	}
+	full.MetadataOmitted = true
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, full)); got != http.StatusNoContent {
+		t.Fatalf("the same report with metadata_omitted: got status %d", got)
+	}
+	over := exactReport(t, api.MaxCatalogReportBytes+api.CatalogReportFlagBytes+1)
+	if got := postCatalog(t, cpURL, bearer(biscuitBytes), priv, reportBody(t, over)); got != http.StatusBadRequest {
+		t.Fatalf("report past the flag's room: got status %d, want %d", got, http.StatusBadRequest)
 	}
 }

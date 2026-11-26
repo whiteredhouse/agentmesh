@@ -405,3 +405,36 @@ func TestReportNodeCatalogLeavesOutMetadataThatDoesNotFit(t *testing.T) {
 		t.Fatal("metadata gone from the registry")
 	}
 }
+
+// A catalog of exactly api.MaxCatalogReportBytes without metadata, once
+// its services gain metadata, is fitted back to at most that size plus the
+// flag's room, which the control plane takes.
+func TestFitCatalogReportKeepsAFullCatalogInRoom(t *testing.T) {
+	report := &api.NodeCatalogReport{}
+	for i := range 512 {
+		report.Services = append(report.Services, &api.ServiceInfo{Type: api.ServiceType_SERVICE_TYPE_A2A, Name: fmt.Sprintf("agent-%03d", i), Description: "d"})
+	}
+	last := report.Services[len(report.Services)-1]
+	for proto.Size(report) < api.MaxCatalogReportBytes {
+		grow := api.MaxCatalogReportBytes - proto.Size(report)
+		if grow > 1024 {
+			grow -= 8
+		} else {
+			grow = 1
+		}
+		last.Description += strings.Repeat("d", grow)
+	}
+	if proto.Size(report) != api.MaxCatalogReportBytes {
+		t.Fatalf("catalog is %d bytes", proto.Size(report))
+	}
+	for _, svc := range report.Services {
+		svc.Metadata = map[string]string{"example.mark.drain": `{"reason":"reboot"}`}
+	}
+	fitted := fitCatalogReport(report)
+	if !fitted.GetMetadataOmitted() {
+		t.Fatal("metadata kept in a report over the limit")
+	}
+	if size := proto.Size(fitted); size > api.MaxCatalogReportBytes+api.CatalogReportFlagBytes {
+		t.Fatalf("fitted report is %d bytes, room is %d", size, api.MaxCatalogReportBytes+api.CatalogReportFlagBytes)
+	}
+}

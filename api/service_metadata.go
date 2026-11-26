@@ -37,10 +37,17 @@ const (
 )
 
 // MaxCatalogReportBytes is the largest serialized NodeCatalogReport a node
-// sends: the control plane's request limit for POST /nodes/catalog. A node
-// whose report would be larger leaves service metadata out of it, so
-// metadata can never cost it its service and status updates.
+// sends as it is. A node whose report would be larger leaves service
+// metadata out of it and sets metadata_omitted, so metadata can never cost
+// it its service and status updates.
 const MaxCatalogReportBytes = 1 << 20
+
+// CatalogReportFlagBytes is the room above MaxCatalogReportBytes that the
+// control plane allows for metadata_omitted, so a report that fit before
+// it had metadata still fits once the node leaves the metadata out and
+// sets the flag. POST /nodes/catalog takes up to MaxCatalogReportBytes +
+// CatalogReportFlagBytes.
+const CatalogReportFlagBytes = 16
 
 // ValidateServiceMetadata checks a service's metadata: at most
 // MaxServiceMetadataEntries keys, each a valid label key (1-63 chars of
