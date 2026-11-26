@@ -63,23 +63,20 @@ const MaxCatalogMetadataBytes = MaxCatalogServices * (MaxServiceMetadataBytes + 
 const MaxCatalogRequestBytes = MaxCatalogReportBytes + MaxCatalogMetadataBytes
 
 // CatalogReportBaseSize is the serialized size of report without its
-// services' metadata: what MaxCatalogReportBytes bounds. It leaves report
-// as it found it, but changes it while it runs, so report must not be
-// shared with another goroutine.
+// services' metadata: what MaxCatalogReportBytes bounds. It measures a copy
+// and never changes report, so it is safe while other goroutines read report
+// and when several entries share one ServiceInfo.
 func CatalogReportBaseSize(report *NodeCatalogReport) int {
-	saved := make([]map[string]string, len(report.GetServices()))
-	for i, svc := range report.GetServices() {
+	base, ok := proto.Clone(report).(*NodeCatalogReport)
+	if !ok || base == nil {
+		return 0
+	}
+	for _, svc := range base.GetServices() {
 		if svc != nil {
-			saved[i], svc.Metadata = svc.Metadata, nil
+			svc.Metadata = nil
 		}
 	}
-	size := proto.Size(report)
-	for i, svc := range report.GetServices() {
-		if svc != nil {
-			svc.Metadata = saved[i]
-		}
-	}
-	return size
+	return proto.Size(base)
 }
 
 // ValidateServiceMetadata checks a service's metadata: at most
