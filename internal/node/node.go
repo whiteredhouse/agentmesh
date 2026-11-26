@@ -2914,8 +2914,7 @@ func (n *AgentMeshNode) reportNodeCatalog(ctx context.Context) error {
 	}
 
 	services := n.ListLocalServices(api.ServiceType_SERVICE_TYPE_UNSPECIFIED)
-	report := fitCatalogReport(&api.NodeCatalogReport{Services: services})
-	if err := n.controlPlane(controlPlaneURL).SendCatalogReport(ctx, token, report); err != nil {
+	if err := n.controlPlane(controlPlaneURL).ReportCatalog(ctx, token, services); err != nil {
 		return fmt.Errorf("failed to report node catalog: %w", err)
 	}
 	return nil

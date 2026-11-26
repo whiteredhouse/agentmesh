@@ -16,8 +16,11 @@ package api
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 )
 
 func TestValidateServiceMetadata(t *testing.T) {
@@ -65,5 +68,56 @@ func TestValidateServiceMetadata(t *testing.T) {
 				t.Fatalf("ValidateServiceMetadata: %v, want ok=%v", err, tc.ok)
 			}
 		})
+	}
+}
+
+// MaxCatalogMetadataBytes holds for any valid metadata: what it adds to a
+// serialized ServiceInfo never passes one service's share of the room.
+func TestCatalogMetadataRoomCoversAnyValidMetadata(t *testing.T) {
+	perService := MaxCatalogMetadataBytes / MaxCatalogServices
+	added := func(md map[string]string) int {
+		return proto.Size(&ServiceInfo{Name: "a", Metadata: md}) - proto.Size(&ServiceInfo{Name: "a"})
+	}
+	shapes := map[string]map[string]string{}
+	// Most entries, values long enough for two-byte lengths, bytes at the limit.
+	many := map[string]string{}
+	for i := range MaxServiceMetadataEntries {
+		k := fmt.Sprintf("k%02d", i)
+		many[k] = strings.Repeat("v", MaxServiceMetadataBytes/MaxServiceMetadataEntries-len(k))
+	}
+	shapes["most entries"] = many
+	shapes["longest key and value"] = map[string]string{strings.Repeat("k", 63): strings.Repeat("v", MaxServiceMetadataValueLen)}
+	two := map[string]string{"a": strings.Repeat("v", MaxServiceMetadataValueLen), "b": strings.Repeat("v", MaxServiceMetadataBytes-MaxServiceMetadataValueLen-2)}
+	shapes["two long values"] = two
+	// Multi-byte runes count in bytes, as the bounds do.
+	shapes["unicode"] = map[string]string{"u": strings.Repeat("ż", MaxServiceMetadataValueLen/2)}
+	for name, md := range shapes {
+		if err := ValidateServiceMetadata(md); err != nil {
+			t.Fatalf("%s: not valid: %v", name, err)
+		}
+		if got := added(md); got > perService {
+			t.Errorf("%s adds %d bytes, share is %d", name, got, perService)
+		}
+	}
+	// Random valid metadata, too.
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 2000 {
+		md := map[string]string{}
+		left := MaxServiceMetadataBytes
+		for range rng.IntN(MaxServiceMetadataEntries + 1) {
+			k := fmt.Sprintf("k%d", len(md))
+			if left < len(k) {
+				break
+			}
+			n := min(rng.IntN(MaxServiceMetadataValueLen+1), left-len(k))
+			md[k] = strings.Repeat("v", n)
+			left -= len(k) + n
+		}
+		if ValidateServiceMetadata(md) != nil {
+			continue
+		}
+		if got := added(md); got > perService {
+			t.Fatalf("%v adds %d bytes, share is %d", md, got, perService)
+		}
 	}
 }

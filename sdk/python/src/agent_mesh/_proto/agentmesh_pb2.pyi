@@ -611,12 +611,10 @@ class ModelArmor(_message.Message):
     def __init__(self, template: _Optional[str] = ..., response: _Optional[_Union[ResponseInspection, str]] = ..., fail_open: bool = ..., timeout: _Optional[_Union[_duration_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class NodeCatalogReport(_message.Message):
-    __slots__ = ["metadata_omitted", "services"]
-    METADATA_OMITTED_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ["services"]
     SERVICES_FIELD_NUMBER: _ClassVar[int]
-    metadata_omitted: bool
     services: _containers.RepeatedCompositeFieldContainer[ServiceInfo]
-    def __init__(self, services: _Optional[_Iterable[_Union[ServiceInfo, _Mapping]]] = ..., metadata_omitted: bool = ...) -> None: ...
+    def __init__(self, services: _Optional[_Iterable[_Union[ServiceInfo, _Mapping]]] = ...) -> None: ...
 
 class NodeListResponse(_message.Message):
     __slots__ = ["next_page_token", "nodes"]
@@ -627,14 +625,12 @@ class NodeListResponse(_message.Message):
     def __init__(self, nodes: _Optional[_Iterable[_Union[EnrolledNode, _Mapping]]] = ..., next_page_token: _Optional[str] = ...) -> None: ...
 
 class NodeServices(_message.Message):
-    __slots__ = ["metadata_omitted", "report_time", "services"]
-    METADATA_OMITTED_FIELD_NUMBER: _ClassVar[int]
+    __slots__ = ["report_time", "services"]
     REPORT_TIME_FIELD_NUMBER: _ClassVar[int]
     SERVICES_FIELD_NUMBER: _ClassVar[int]
-    metadata_omitted: bool
     report_time: _timestamp_pb2.Timestamp
     services: _containers.RepeatedCompositeFieldContainer[ServiceInfo]
-    def __init__(self, services: _Optional[_Iterable[_Union[ServiceInfo, _Mapping]]] = ..., report_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ..., metadata_omitted: bool = ...) -> None: ...
+    def __init__(self, services: _Optional[_Iterable[_Union[ServiceInfo, _Mapping]]] = ..., report_time: _Optional[_Union[_timestamp_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class OIDCFederation(_message.Message):
     __slots__ = ["audience", "impersonate", "scopes", "token_endpoint"]

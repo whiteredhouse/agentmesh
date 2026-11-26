@@ -259,13 +259,7 @@ func (c *Client) FetchRevocations(ctx context.Context, biscuit []byte) (*api.Rev
 // biscuit and signed challenge: reports the services currently registered on
 // the node.
 func (c *Client) ReportCatalog(ctx context.Context, biscuit []byte, services []*api.ServiceInfo) error {
-	return c.SendCatalogReport(ctx, biscuit, &api.NodeCatalogReport{Services: services})
-}
-
-// SendCatalogReport is POST /nodes/catalog with a whole report, such as one
-// that says it left metadata out.
-func (c *Client) SendCatalogReport(ctx context.Context, biscuit []byte, report *api.NodeCatalogReport) error {
-	payload, err := proto.Marshal(report)
+	payload, err := proto.Marshal(&api.NodeCatalogReport{Services: services})
 	if err != nil {
 		return fmt.Errorf("failed to encode catalog report: %w", err)
 	}

@@ -22,10 +22,9 @@ import (
 
 // Service metadata (ServiceInfo.metadata) is owner-supplied key/value data
 // about one service, such as a maintenance note. Agent Mesh carries it but
-// never interprets it. The bounds keep it a small share of a catalog
-// report: at the most services a report may carry (512), metadata at its
-// limit takes under 600 KiB of the control plane's 1 MiB request limit,
-// leaving the rest for names, descriptions and statuses.
+// never interprets it. The bounds are checked when metadata is set, never
+// trimmed later, and the control plane reserves room for the most a
+// catalog report can carry (MaxCatalogMetadataBytes).
 const (
 	// MaxServiceMetadataEntries bounds the number of keys on one service.
 	MaxServiceMetadataEntries = 16
@@ -36,18 +35,24 @@ const (
 	MaxServiceMetadataBytes = 1024
 )
 
-// MaxCatalogReportBytes is the largest serialized NodeCatalogReport a node
-// sends as it is. A node whose report would be larger leaves service
-// metadata out of it and sets metadata_omitted, so metadata can never cost
-// it its service and status updates.
+// MaxCatalogReportBytes is the room POST /nodes/catalog gives a report for
+// everything but service metadata: services, descriptions and statuses.
 const MaxCatalogReportBytes = 1 << 20
 
-// CatalogReportFlagBytes is the room above MaxCatalogReportBytes that the
-// control plane allows for metadata_omitted, so a report that fit before
-// it had metadata still fits once the node leaves the metadata out and
-// sets the flag. POST /nodes/catalog takes up to MaxCatalogReportBytes +
-// CatalogReportFlagBytes.
-const CatalogReportFlagBytes = 16
+// MaxCatalogServices is the most services one catalog report may carry.
+const MaxCatalogServices = 512
+
+// maxServiceMetadataEntryOverhead is the most protobuf framing one metadata
+// entry adds beyond its key and value bytes: the map field's tag (up to 2
+// bytes) and length, and the key's and value's tags and lengths.
+const maxServiceMetadataEntryOverhead = 2 + 2 + 1 + 1 + 1 + 2
+
+// MaxCatalogMetadataBytes is the most a catalog report's service metadata
+// can add to it, serialized: every service at MaxServiceMetadataBytes with
+// MaxServiceMetadataEntries entries. POST /nodes/catalog takes this much on
+// top of MaxCatalogReportBytes, so a report that fit before metadata always
+// fits with it, and a node never has to drop or trim metadata to report.
+const MaxCatalogMetadataBytes = MaxCatalogServices * (MaxServiceMetadataBytes + MaxServiceMetadataEntries*maxServiceMetadataEntryOverhead)
 
 // ValidateServiceMetadata checks a service's metadata: at most
 // MaxServiceMetadataEntries keys, each a valid label key (1-63 chars of
