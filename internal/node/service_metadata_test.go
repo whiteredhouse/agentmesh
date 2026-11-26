@@ -321,8 +321,9 @@ func TestServiceRegistry_SharedInfoPointer(t *testing.T) {
 }
 
 // Discovery hands on only metadata a node could have set: a remote peer's
-// invalid or malformed metadata is dropped, every service stays listed, and
-// null entries are skipped.
+// invalid or malformed metadata is dropped and its service stays listed;
+// entries that are null, empty or not a service are skipped without hiding
+// the others.
 func TestDecodeRemoteCatalog(t *testing.T) {
 	tooMany := map[string]string{}
 	for i := range api.MaxServiceMetadataEntries + 1 {
@@ -342,7 +343,13 @@ func TestDecodeRemoteCatalog(t *testing.T) {
 		{"type":1,"name":"null-value","metadata":{"flag":null}},
 		{"type":1,"name":"null-map","metadata":null},
 		{"type":1,"name":"empty-value","metadata":{"flag":""}},
-		{"type":1,"name":"none"}
+		{"type":1,"name":"none"},
+		{"type":1,"name":7},
+		{"type":"not-a-number","name":"bad-type"},
+		"a string",
+		5,
+		[],
+		{}
 	]`
 	got, err := decodeRemoteCatalog("peer", text)
 	if err != nil {
