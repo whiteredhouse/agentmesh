@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -146,4 +147,41 @@ func TestCatalogReportBaseSize(t *testing.T) {
 	if proto.Size(report) <= CatalogReportBaseSize(report) {
 		t.Fatal("metadata added nothing to the size")
 	}
+}
+
+// Two entries sharing one ServiceInfo must keep its metadata: measuring may
+// not write to the report at all.
+func TestCatalogReportBaseSizeSharedService(t *testing.T) {
+	shared := &ServiceInfo{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Metadata: map[string]string{"k": "v"}}
+	report := &NodeCatalogReport{Services: []*ServiceInfo{shared, shared}}
+	before := proto.Size(report)
+	stripped := &NodeCatalogReport{Services: []*ServiceInfo{
+		{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a"},
+		{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a"},
+	}}
+	if got, want := CatalogReportBaseSize(report), proto.Size(stripped); got != want {
+		t.Fatalf("base size %d, want %d", got, want)
+	}
+	if shared.GetMetadata()["k"] != "v" || proto.Size(report) != before {
+		t.Fatalf("report changed: metadata %v", shared.GetMetadata())
+	}
+}
+
+// Measuring runs while other goroutines read the same report.
+func TestCatalogReportBaseSizeConcurrentReaders(t *testing.T) {
+	report := &NodeCatalogReport{Services: []*ServiceInfo{
+		{Type: ServiceType_SERVICE_TYPE_A2A, Name: "a", Metadata: map[string]string{"k": "v"}},
+	}}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = CatalogReportBaseSize(report) }()
+		go func() {
+			defer wg.Done()
+			if report.Services[0].GetMetadata()["k"] != "v" {
+				t.Error("metadata cleared while measuring")
+			}
+		}()
+	}
+	wg.Wait()
 }
